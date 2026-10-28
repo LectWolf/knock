@@ -305,3 +305,77 @@ async fn a_heartbeat_keeps_the_door_from_expiring() {
 
     assert_eq!(host.state(), ConnState::Waiting, "睡这么久，房主状态不该变");
 }
+
+/// "我这边没开服，他敲门我会不会看到人？"——这个问题的答案不该靠猜。
+///
+/// 房主在一个**没人监听**的端口上开门，房客照常敲：
+///   - 房客的结局应该是 `host_offline`（如实说"屋里没人"，不是"码错了"）
+///   - 房主的名册：先出现、再消失，还是压根不出现？这里把它量出来。
+#[tokio::test]
+#[ignore]
+async fn a_guest_who_finds_no_game_still_shows_up_first() {
+    let base = env("KNOCK_NODE_URL");
+    let node_code = env("KNOCK_NODE_CODE");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    // 拿一个没人监听的端口：绑一下再放开
+    let dead_port = {
+        let l = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        l.local_addr().unwrap().port()
+    };
+
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_sink, _log) = recorder();
+    host.on_state(_sink);
+    host.connect(Target::Open { port: dead_port }).expect("房主受理");
+
+    wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
+    wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+    println!("门牌号 {code}（本机 {dead_port} 没有服务）");
+
+    let invite = format!("{node_code}.{code}");
+    let mut guest = IrohTransport::new(Arc::clone(&client));
+    let (_gsink, glog) = recorder();
+    guest.on_state(_gsink);
+    guest.connect(Target::Knock { invite: &invite }).expect("房客受理");
+
+    // 一边等房客出结果，一边紧盯房主的名册
+    let sessions = host.sessions();
+    let mut peak = 0usize;
+    let mut peak_names: Vec<String> = Vec::new();
+    for _ in 0..(40 * 25) {
+        let snap = sessions.snapshot();
+        if snap.len() > peak {
+            peak = snap.len();
+            peak_names = snap.iter().map(|(_, e)| e.nickname.clone()).collect();
+        }
+        if matches!(guest.state(), ConnState::Failed | ConnState::Direct | ConnState::Relay) {
+            // 再观察一小会儿，确认不是"出现了立刻就没了"
+            for _ in 0..40 {
+                let snap = sessions.snapshot();
+                if snap.len() > peak {
+                    peak = snap.len();
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+
+    let log = glog.lock().unwrap();
+    let fail = log.iter().rev().find(|u| u.fail.is_some()).and_then(|u| u.fail);
+    println!("房客最终状态 {:?}，失败原因 {:?}", guest.state(), fail);
+    println!("房主名册峰值 {peak} 人 {peak_names:?}（此刻 {} 人）", sessions.len());
+
+    assert_eq!(guest.state(), ConnState::Failed, "没服务就该失败");
+    assert_eq!(fail, Some(FailReason::HostOffline), "要报'屋里没人'，不是别的");
+    assert_eq!(
+        sessions.len(),
+        0,
+        "失败之后不该继续挂在名册里——那会让人以为他还在"
+    );
+    println!("门牌号看到的峰值人数：{peak}（0 = 名字没露过脸就被收回）");
+}

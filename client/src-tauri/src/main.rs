@@ -147,6 +147,18 @@ fn nodes_refresh(app: AppHandle) -> Result<knock::nodes::List, String> {
     Ok(list)
 }
 
+/// 房客这一侧本机该连哪儿。拿到 `direct`/`relay` 之后界面要把它写出来，
+/// 不然玩家不知道在游戏里填什么地址——这是"能不能真的玩"的关键一环。
+#[tauri::command]
+fn entry_addr(st: State<'_, App>) -> Option<String> {
+    st.transport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|t| t.local_addr())
+        .map(|a| a.to_string())
+}
+
 /// 现在这扇门的门牌号。没开门时是空。
 #[tauri::command]
 fn door_code(st: State<'_, App>) -> Option<String> {
@@ -271,6 +283,7 @@ fn main() {
             close_door,
             door_state,
             door_code,
+            entry_addr,
             nodes_cached,
             nodes_refresh,
             guests,

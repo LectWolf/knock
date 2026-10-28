@@ -81,6 +81,8 @@ const fail = ref<FailReason>(
 const theme = ref<Theme>(pick("theme", ["auto", "light", "dark"], "auto"));
 
 const code = ref(params.get("code") ?? "······");
+/* 房客侧：本机入口 127.0.0.1:xxxxx，游戏里要填这个 */
+const entry = ref(params.get("addr") ?? "");
 
 /* 昵称：首次启动必须设，之后在设置里改 */
 const nickname = ref(params.get("nickname") ?? "");
@@ -141,6 +143,8 @@ const pull = async () => {
   if (!invoke) return;
   const s = await invoke("door_state").catch(() => null);
   if (s) state.value = s as ConnState;
+  const e = await invoke("entry_addr").catch(() => null);
+  if (typeof e === "string" && e) entry.value = e;
   const c = await invoke("door_code").catch(() => null);
   if (typeof c === "string" && c) code.value = c.toUpperCase();
   trackOpenTimer();
@@ -327,6 +331,19 @@ const legacyCopy = (text: string) => {
   const ok = document.execCommand("copy");
   document.body.removeChild(el);
   return ok;
+};
+
+const entryCopied = ref(false);
+const copyEntry = async () => {
+  const text = entry.value;
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch {
+    if (!legacyCopy(text)) return;
+  }
+  entryCopied.value = true;
+  window.setTimeout(() => (entryCopied.value = false), 1800);
 };
 
 const copyCode = async () => {
@@ -634,6 +651,18 @@ const retry = () => {
         </div>
         <h1 class="title">门开了</h1>
         <p class="lede">{{ status.hint }}</p>
+
+        <div v-if="entry" class="entry-box">
+          <span class="entry-label">游戏里连这里</span>
+          <div class="entry-row">
+            <code class="mono entry-addr">{{ entry }}</code>
+            <button class="ghost tiny" type="button" @click="copyEntry">
+              {{ entryCopied ? "已复制" : "复制" }}
+            </button>
+          </div>
+          <p class="note">多人游戏 → 直接连接 → 粘贴这个地址</p>
+        </div>
+
         <button class="ghost" type="button" @click="retry">回到门口</button>
       </template>
 
@@ -1100,6 +1129,43 @@ textarea {
 }
 .panel-inline .field {
   max-width: none;
+}
+
+.entry-box {
+  width: 100%;
+  margin-top: 18px;
+  padding: 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+}
+.entry-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+.entry-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.entry-addr {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+}
+.entry-box .note {
+  margin-top: 8px;
 }
 
 .nodes {
