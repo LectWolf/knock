@@ -130,6 +130,16 @@ fn close_door(st: State<'_, App>) {
     *st.transport.lock().unwrap() = None;
 }
 
+/// 现在这扇门的门牌号。没开门时是空。
+#[tauri::command]
+fn door_code(st: State<'_, App>) -> Option<String> {
+    st.transport
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|t| t.room_code())
+}
+
 #[tauri::command]
 fn door_state(st: State<'_, App>) -> String {
     st.transport
@@ -232,6 +242,7 @@ fn main() {
             knock,
             close_door,
             door_state,
+            door_code,
             guests,
             kick,
             win_minimize,

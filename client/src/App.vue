@@ -72,7 +72,7 @@ const fail = ref<FailReason>(
 );
 const theme = ref<Theme>(pick("theme", ["auto", "light", "dark"], "auto"));
 
-const code = ref(params.get("code") ?? "A7K2M9");
+const code = ref(params.get("code") ?? "······");
 
 /* 昵称：首次启动必须设，之后在设置里改 */
 const nickname = ref(params.get("nickname") ?? "");
@@ -124,10 +124,18 @@ const persist = async () => {
   }).catch(() => {});
 };
 
+const trackOpenTimer = () => {
+  if (state.value === "waiting" && openedAt.value === null) openedAt.value = Date.now();
+  if (state.value !== "waiting" && openedAt.value !== null) openedAt.value = null;
+};
+
 const pull = async () => {
   if (!invoke) return;
   const s = await invoke("door_state").catch(() => null);
   if (s) state.value = s as ConnState;
+  const c = await invoke("door_code").catch(() => null);
+  if (typeof c === "string" && c) code.value = c.toUpperCase();
+  trackOpenTimer();
   const gs = await invoke("guests").catch(() => null);
   if (Array.isArray(gs)) {
     guests.value = gs.map((g: any) => ({
@@ -146,6 +154,8 @@ onMounted(async () => {
   shell?.event?.listen?.("knock://state", (e: any) => {
     state.value = e.payload.state as ConnState;
     if (e.payload.fail) fail.value = e.payload.fail;
+    if (e.payload.state === "waiting" && openedAt.value === null) openedAt.value = Date.now();
+    if (e.payload.state !== "waiting") openedAt.value = null;
   });
   shell?.event?.listen?.("knock://tray", (msg: string) => {
     if (msg === "close_door") void closeDoor();
@@ -227,13 +237,19 @@ const status = computed(() => {
 });
 
 /* 门开了多久 / 关门 */
-const opened = ref(Number(params.get("open") ?? "12"));
+/* 门开了多久：记录进入 waiting 的真实时刻，不认 URL 参数 */
+const openedAt = ref<number | null>(null);
+const now = ref(Date.now());
+window.setInterval(() => (now.value = Date.now()), 1000);
+const opened = computed(() =>
+  openedAt.value === null ? 0 : Math.floor((now.value - openedAt.value) / 60000),
+);
 const confirmClose = ref(false);
 const closeDoor = async () => {
   confirmClose.value = false;
   if (isShell) await invoke!("close_door").catch(() => {});
   state.value = "idle";
-  opened.value = 0;
+  openedAt.value = null;
 };
 
 const copied = ref(false);

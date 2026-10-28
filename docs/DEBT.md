@@ -8,6 +8,10 @@
    窗口能起来，关窗口缩托盘实测有效（`IsWindowVisible` 为 False，进程仍在）。
 2. ~~界面没接 Rust~~ **已接**：`load_settings / save_settings / open_door / knock / close_door / door_state / guests / kick` 八个命令，
    状态走 `knock://state` 事件、名册每秒拉一次。**但只在浏览器外验证了"读设置"这一段**，开门/敲门全靠网络，没端到端跑通。
+2b. **门牌号与"开了多久"都来自 Rust 了**：`door_code` 命令取 `transport.room_code()`，
+     计时从进入 `waiting` 的那一刻算，不再读 URL 参数。
+     （之前这两处是演示值：码写死 `A7K2M9`、时长默认 12 分钟——已经真机暴露过一次。）
+
 3. **名册是轮询不是推送**：`guests` 每秒拉一次。人多了没问题，但应该改成 transport 在 join/kick 时主动 emit。
 
 4. ~~没有托盘~~ **已补**：左键唤回窗口，右键菜单（打开主界面 / 关门 / 退出）。
