@@ -15,7 +15,7 @@
 //	                                  409 too_many_announces
 //	GET    /rooms/{code}           → 200 {...} | 404 code_not_found | 429 too_many_requests
 //	DELETE /rooms/{code}           → 204 | 404 code_not_found | 429 too_many_requests
-//	GET    /healthz                → 200 {status:"ok", rooms:N}
+//	GET    /healthz                → 200 {status:"ok", name:"香港·荃湾", proto:{api,transport}, rooms:N}
 //
 // 三处刻意的设计：
 //
@@ -53,6 +53,7 @@ type API struct {
 	create   *ratelimit.Limiter
 	nodeID   string
 	relayURL string
+	name     string
 }
 
 // Option 是可选的防护配置。不传就是不限速（只在测试或本机调试时这样用）。
@@ -82,6 +83,12 @@ func WithNodeID(id string) Option {
 // 留空表示这个节点只做信令。
 func WithRelayURL(u string) Option {
 	return func(a *API) { a.relayURL = u }
+}
+
+// WithName 设置节点对外显示的名字，比如「香港·荃湾」。
+// 名字由节点自己报，不依赖任何公共名单——名单只是省去手输节点码。
+func WithName(name string) Option {
+	return func(a *API) { a.name = name }
 }
 
 func New(svc *rooms.Service, opts ...Option) *API {
@@ -287,6 +294,8 @@ func (a *API) closeRoom(w http.ResponseWriter, r *http.Request) {
 func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":        "ok",
+		"name":          a.name,
+		"proto":         protoInfo{API: ProtoAPI, Transport: ProtoTransport},
 		"rooms":         a.svc.Len(),
 		"lookup_limit":  a.lookup.Limit(),
 		"create_limit":  a.create.Limit(),

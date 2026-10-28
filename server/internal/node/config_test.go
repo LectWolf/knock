@@ -87,6 +87,9 @@ func TestValidateRejectsBrokenConfigs(t *testing.T) {
 		"中继用明文 http": func(c *node.Config) { c.RelayURL = "http://relay.example.com" },
 		"中继地址不是地址":   func(c *node.Config) { c.RelayURL = "relay.example.com" },
 		"中继协议不认识":    func(c *node.Config) { c.RelayURL = "quic://relay.example.com" },
+		// 名字会显示在客户端上，太长或带控制字符都要挡住
+		"名字太长":   func(c *node.Config) { c.Name = strings.Repeat("香", node.NameMaxChars+1) },
+		"名字有控制符": func(c *node.Config) { c.Name = "香港" + string(rune(7)) + "荃湾" },
 	}
 
 	for name, mutate := range cases {

@@ -21,7 +21,15 @@ const ConfigFileName = "node.json"
 // Config 是节点主人能在配置文件里改的全部东西。
 //
 // 刻意做成"一屏能看完"的扁平结构：节点是给人自托管的，配置项多了没人调得动。
+// NameMaxChars 是节点名字的上限。太长了客户端一行放不下，也没人读。
+const NameMaxChars = 32
+
 type Config struct {
+	// Name 是这个节点给别人看的名字，比如「香港·荃湾」。
+	// 节点自己报出来，客户端才能在没有公共列表时也知道这是谁。
+	// 留空则不显示名字，只显示标签。
+	Name string `json:"name"`
+
 	// Label 是节点自选标签（4 个 Crockford 字符），用于短邀请。
 	// 留空则由 pin 派生，保证同一台机器的标签稳定。
 	Label string `json:"label"`
@@ -165,6 +173,16 @@ func (c Config) TTL() (time.Duration, error) {
 
 // Validate 在启动前把配置错误一次性说清楚，而不是等第一个请求来才炸。
 func (c Config) Validate() error {
+	// 名字是给人看的，脏字符会顺着界面漏下去，所以在入口就拦住
+	name := strings.TrimSpace(c.Name)
+	if len([]rune(name)) > NameMaxChars {
+		return fmt.Errorf("node: 名字最多 %d 个字", NameMaxChars)
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			return fmt.Errorf("node: 名字里不能有控制字符")
+		}
+	}
 	if c.PublicPort == 0 {
 		return errors.New("public_port 不能是 0")
 	}

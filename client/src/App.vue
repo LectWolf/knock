@@ -138,6 +138,15 @@ const status = computed(() => {
   }
 });
 
+/* 门开了多久 / 关门 */
+const opened = ref(Number(params.get("open") ?? "12"));
+const confirmClose = ref(false);
+const closeDoor = () => {
+  confirmClose.value = false;
+  state.value = "idle";
+  opened.value = 0;
+};
+
 const copied = ref(false);
 let timer: number | undefined;
 const copyCode = async () => {
@@ -292,6 +301,12 @@ const retry = () => {
         <div class="pulse" v-if="state === 'creating'" aria-hidden="true"></div>
 
         <template v-if="state === 'waiting'">
+          <div class="open-meta">
+            <span class="live-dot" aria-hidden="true"></span>
+            <span>门开着</span>
+            <span class="dot-sep">·</span>
+            <span class="mono">{{ opened }} 分钟</span>
+          </div>
           <p class="eyebrow">门牌号</p>
           <div class="code-display mono">{{ code }}</div>
           <div class="row">
@@ -321,6 +336,17 @@ const retry = () => {
             </p>
           </div>
           <p class="hint">把门牌号发给他，他就能进来。你在门就开着。</p>
+
+          <div v-if="!confirmClose" class="door-actions">
+            <button class="ghost danger" type="button" @click="confirmClose = true">关门</button>
+          </div>
+          <div v-else class="confirm">
+            <p class="confirm-text">关门后，门里的人都会断开，这门牌号就作废了。</p>
+            <div class="confirm-actions">
+              <button class="ghost danger-strong" type="button" @click="closeDoor">确定关门</button>
+              <button class="ghost" type="button" @click="confirmClose = false">算了</button>
+            </div>
+          </div>
         </template>
 
         <template v-else>
@@ -655,6 +681,59 @@ const retry = () => {
 .bar-right {
   display: flex;
   gap: 6px;
+}
+
+/* —— 门开着多久 / 关门 —— */
+.open-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--text-soft);
+}
+.live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+  animation: breathe 2.4s ease-in-out infinite;
+}
+.dot-sep {
+  color: var(--muted);
+}
+.door-actions {
+  margin-top: 6px;
+}
+.ghost.danger:hover {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.ghost.danger-strong {
+  color: var(--err);
+  border-color: var(--err);
+  background: var(--err-soft);
+}
+.confirm {
+  width: 100%;
+  max-width: 320px;
+  margin-top: 8px;
+  padding: 12px 14px;
+  background: var(--surface-2);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--r-md);
+  text-align: left;
+}
+.confirm-text {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  color: var(--text-soft);
+  line-height: 1.5;
+}
+.confirm-actions {
+  display: flex;
+  gap: 8px;
 }
 
 /* —— 门里的人 —— */
