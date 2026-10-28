@@ -34,6 +34,38 @@ fn recorder() -> (StateSink, Arc<Mutex<Vec<Update>>>) {
     )
 }
 
+/// 等到条件成立返回 true，超时返回 false（不像 wait_for 那样 panic）
+async fn wait_or(what: &str, secs: u64, mut done: impl FnMut() -> bool) -> bool {
+    for _ in 0..(secs * 10) {
+        if done() {
+            return true;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    println!("超时：{what}");
+    false
+}
+
+/// 开门可能要排队：节点有速率限制，测试里连着开很多扇门会被挡一下。
+/// 按它给的 retry_after 等一下再来，别把限流当成功能坏了。
+async fn open_retrying(
+    client: &Arc<dyn knock::room::RoomClient + Send + Sync>,
+    port: u16,
+) -> knock::room::RoomInfo {
+    for _ in 0..4 {
+        match client.open(port) {
+            Ok(room) => return room,
+            Err(knock::room::RoomError::RateLimited { retry_after }) => {
+                let wait = retry_after.unwrap_or(5).min(30);
+                println!("开门被限流，{} 秒后再试", wait);
+                tokio::time::sleep(Duration::from_secs(wait as u64)).await;
+            }
+            Err(e) => panic!("开门失败: {e:?}"),
+        }
+    }
+    panic!("开门重试多次仍被限流");
+}
+
 async fn wait_for(what: &str, secs: u64, mut cond: impl FnMut() -> bool) {
     for _ in 0..(secs * 20) {
         if cond() {
@@ -156,7 +188,7 @@ async fn a_room_without_a_host_fails_as_host_offline() {
         Arc::new(HttpRoomClient::new(base));
 
     // 只开门、不 announce：门开着，但屋里没人
-    let room = client.open(25565).expect("开门");
+    let room = open_retrying(&client, 25565).await;
     let invite = format!("{node_code}.{}", room.code);
 
     let mut guest = IrohTransport::new(Arc::clone(&client));
@@ -223,11 +255,13 @@ async fn a_failed_punch_falls_back_to_the_relay() {
 
     let mc_port = fake_mc_server().await;
     let serve_ep = host_ep.clone();
+    // 跟生产一样走"先自报家门、再放行"的入口：裸 serve 收不了报到帧
+    let gate = std::sync::Arc::new(knock::sessions::SessionList::new());
     tokio::spawn(async move {
-        let _ = pipe::serve(serve_ep, ([127, 0, 0, 1], mc_port).into()).await;
+        let _ = pipe::serve_gated(serve_ep, ([127, 0, 0, 1], mc_port).into(), gate).await;
     });
 
-    let room = client.open(25565).expect("开门");
+    let room = open_retrying(&client, 25565).await;
     let token = room.token.clone().expect("令牌");
     let host_hex: String = host_ep.id().as_bytes().iter().map(|b| format!("{b:02x}")).collect();
 
@@ -378,4 +412,41 @@ async fn a_guest_who_finds_no_game_still_shows_up_first() {
         "失败之后不该继续挂在名册里——那会让人以为他还在"
     );
     println!("门牌号看到的峰值人数：{peak}（0 = 名字没露过脸就被收回）");
+}
+
+/// 敲了门就该出现在"门里的人"里——不用等 MC 客户端真的连进来。
+/// 这是房主最直观的一条反馈："他到了"。
+#[tokio::test]
+#[ignore]
+async fn knocking_alone_puts_the_guest_in_the_roster() {
+    let base = env("KNOCK_NODE_URL");
+    let node_code = env("KNOCK_NODE_CODE");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    let mc_port = fake_mc_server().await;
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_sink, _log) = recorder();
+    host.on_state(_sink);
+    host.connect(Target::Open { port: mc_port }).expect("房主受理");
+    wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
+    wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+
+    let invite = format!("{node_code}.{code}");
+    let mut guest = IrohTransport::new(Arc::clone(&client));
+    let (_gsink, _glog) = recorder();
+    guest.on_state(_gsink);
+    guest.connect(Target::Knock { invite: &invite }).expect("房客受理");
+
+    // 期间**没有任何游戏流量**，只有敲门这一下
+    let sessions = host.sessions();
+    let ok = wait_or("房主名册里出现他", 15, || sessions.len() >= 1).await;
+    println!("敲门后名册 {} 人，房客状态 {:?}", sessions.len(), guest.state());
+    assert!(ok, "敲了门就该出现在名册里");
+    assert!(
+        matches!(guest.state(), ConnState::Direct | ConnState::Relay),
+        "房客应该已经门开了，实际 {:?}",
+        guest.state()
+    );
 }

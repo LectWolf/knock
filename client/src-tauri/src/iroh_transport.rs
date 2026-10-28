@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, PublicKey, RelayUrl};
 
+use crate::control::RejectReason;
 use crate::invite::Invite;
 use crate::machine::{Event, Machine, RelayPolicy, Role, Update};
 use crate::pipe;
@@ -392,10 +393,29 @@ impl Ctx {
 
             // 拨一次，看能不能真的通：只在预算内等
             let budget = Duration::from_secs(attempt.budget_secs);
-            let ok = matches!(
-                tokio::time::timeout(budget, probe(&endpoint, addr.clone())).await,
-                Ok(true)
-            );
+            let outcome = match tokio::time::timeout(
+                budget,
+                pipe::hello_probe(&endpoint, addr.clone(), pipe::default_hello()),
+            )
+            .await
+            {
+                Ok(o) => o,
+                Err(_) => pipe::HelloProbe::NoAnswer,
+            };
+            if let pipe::HelloProbe::Rejected(reason) = outcome {
+                let why = match reason {
+                    RejectReason::HostOffline => FailReason::HostOffline,
+                    RejectReason::Version => FailReason::NodeOutdated,
+                    RejectReason::Closing => FailReason::HostOffline,
+                    RejectReason::Kicked => FailReason::CodeNotFound,
+                };
+                self.fail(why);
+                return Ok(());
+            }
+            let ok = matches!(outcome, pipe::HelloProbe::Admitted);
+            if std::env::var("KNOCK_TRACE").is_ok() {
+                eprintln!("[trace] {:?} ok={ok} alive={}", attempt.kind, self.alive());
+            }
 
             if !ok {
                 continue;
@@ -413,13 +433,17 @@ impl Ctx {
             return Ok(());
         }
 
-        // 两条路都不通
-        let reason = if self.policy == RelayPolicy::Never {
-            FailReason::SymmetricNat
+        if std::env::var("KNOCK_TRACE").is_ok() {
+            eprintln!("[trace] 两条路都不通，报失败");
+        }
+        // 两条路都不通：这里必须给一个**终止**事件。
+        // 之前用 PunchTimedOut，而「自动绕路」策略下它只表示"接着试中继"，
+        // 于是界面会永远停在"正在敲门…"——真的两条都不通时就成了卡死。
+        if self.policy == RelayPolicy::Never {
+            self.fail(FailReason::SymmetricNat);
         } else {
-            FailReason::RelayUnavailable
-        };
-        self.fail(reason);
+            let _ = self.emit(Event::RelayRejected);
+        }
         Ok(())
     }
 }

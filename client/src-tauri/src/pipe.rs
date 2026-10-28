@@ -16,7 +16,7 @@ use std::net::SocketAddr;
 use iroh::endpoint::presets;
 use iroh::{Endpoint, EndpointAddr, RelayMap, RelayMode};
 
-use crate::control::{self, Hello, Reply};
+use crate::control::{self, Hello, RejectReason, Reply};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -128,7 +128,7 @@ impl Gate for AllowAll {
 pub type GateRef = std::sync::Arc<dyn Gate>;
 
 /// 房客默认的自报家门。昵称真正接上之后由界面传入。
-fn default_hello() -> Hello {
+pub fn default_hello() -> Hello {
     Hello {
         proto: control::PROTO_VERSION,
         nickname: "knock".to_string(),
@@ -168,11 +168,32 @@ pub async fn serve_gated(endpoint: Endpoint, target: SocketAddr, gate: GateRef) 
                     return;
                 }
             };
-            let reply = gate.admit(&hello, &peer);
+            // 先自己试一下屋里有没有人：房主的游戏端口不响，就别让人进来白跑
+            let game_up = tokio::time::timeout(
+                std::time::Duration::from_millis(600),
+                tokio::net::TcpStream::connect(target),
+            )
+            .await
+            .map(|r| r.is_ok())
+            .unwrap_or(false);
+
+            if std::env::var("KNOCK_TRACE").is_ok() {
+                eprintln!("[host] hello from {peer:?} game_up={game_up} target={target}");
+            }
+            let reply = if game_up {
+                gate.admit(&hello, &peer)
+            } else {
+                Reply::False {
+                    reason: RejectReason::HostOffline,
+                }
+            };
             if send_frame(&mut control_send, &reply).await.is_err() {
                 return;
             }
             if reply != Reply::True {
+                // 先把请柬说完整再关门：说走就走，对方只会看到"连接断了"
+                let _ = control_send.finish();
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 connection.close(3u8.into(), b"rejected");
                 return;
             }
@@ -203,6 +224,60 @@ pub async fn serve_gated(endpoint: Endpoint, target: SocketAddr, gate: GateRef) 
 /// 房客侧：在本机开一个端口，谁连上来就替他连到 `node`。
 ///
 /// 返回的是本机监听地址——把它填进 MC 的"服务器地址"就能进服。
+/// 敲门后的第一次对话：说自己到了，等房主回一句。
+pub enum HelloProbe {
+    /// 房主点头了；连接留着，名册里能看到你
+    Admitted,
+    /// 房主明确拒绝
+    Rejected(RejectReason),
+    /// 没人应门 / 超时
+    NoAnswer,
+}
+
+pub async fn hello_probe(endpoint: &Endpoint, node: EndpointAddr, hello: Hello) -> HelloProbe {
+    let Ok(connection) = endpoint.connect(node, ALPN).await else {
+        return HelloProbe::NoAnswer;
+    };
+    let Ok((mut send, mut recv)) = connection.open_bi().await else {
+        return HelloProbe::NoAnswer;
+    };
+    if send_frame(&mut send, &hello).await.is_err() {
+        return HelloProbe::NoAnswer;
+    }
+    let reply: Reply = match tokio::time::timeout(
+        std::time::Duration::from_secs(6),
+        recv_frame(&mut recv),
+    )
+    .await
+    {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => {
+            if std::env::var("KNOCK_TRACE").is_ok() {
+                eprintln!("[guest] 收答复失败: {e:?}");
+            }
+            return HelloProbe::NoAnswer;
+        }
+        Err(_) => {
+            if std::env::var("KNOCK_TRACE").is_ok() {
+                eprintln!("[guest] 等答复超时");
+            }
+            return HelloProbe::NoAnswer;
+        }
+    };
+    if std::env::var("KNOCK_TRACE").is_ok() {
+        eprintln!("[guest] reply={reply:?}");
+    }
+    match reply {
+        Reply::True => {
+            tokio::spawn(async move {
+                let _ = connection.closed().await;
+            });
+            HelloProbe::Admitted
+        }
+        Reply::False { reason } => HelloProbe::Rejected(reason),
+    }
+}
+
 pub async fn listen_local(endpoint: Endpoint, node: EndpointAddr) -> io::Result<SocketAddr> {
     listen_local_hello(endpoint, node, default_hello()).await
 }

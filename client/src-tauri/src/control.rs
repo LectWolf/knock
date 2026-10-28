@@ -49,6 +49,8 @@ pub enum RejectReason {
     Version,
     /// 房主正在关这扇门
     Closing,
+    /// 门开着，但这家的游戏服务没起来
+    HostOffline,
 }
 
 /// 帧编解码的失败。

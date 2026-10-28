@@ -70,6 +70,7 @@ docs/adr/          决策记录，改架构先在这里加一篇
 | `blocked_by_firewall` | 门被挡住了（本机防火墙） |
 | `symmetric_nat` | 两边都出不去（对称 NAT），需要中继 |
 | `relay_unavailable` | 绕路也走不通，稍后再试 |
+| `node_outdated` | 这个节点还是老版本，连不上（让节点主人更新） |
 
 归因规则：**能归因到更具体的原因就报具体原因**（对称 NAT、本机防火墙），
 真的没有可归因原因时才用 `relay_unavailable` 兜底；中继中途断开也归 `relay_unavailable`。
