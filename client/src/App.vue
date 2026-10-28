@@ -118,6 +118,7 @@ const loadSettings = async () => {
   theme.value = (s.theme as Theme) ?? "auto";
   relayPolicy.value = s.relay ?? "auto";
   nodeAddr.value = s.node ?? "";
+  if (s.node_name) nodeName.value = s.node_name;
   if (s.nickname) firstRun.value = false;
 };
 
@@ -127,6 +128,7 @@ const persist = async () => {
     settings: {
       nickname: nickname.value,
       node: nodeAddr.value,
+      node_name: nodeName.value,
       port: Number(server.value) || 25565,
       relay: relayPolicy.value,
       theme: theme.value,
@@ -203,10 +205,83 @@ const refreshNodes = async () => {
   }
 };
 
-const pickNode = async (n: any) => {
+const showNodes = ref(params.get("panel") === "nodes");
+const nodeQuery = ref("");
+const customCode = ref("");
+const nodeWarn = ref("");
+const pendingNode = ref<any | null>(null);
+const nodeName = ref(params.get("node_name") ?? "");
+
+const filteredNodes = computed(() => {
+  const q = nodeQuery.value.trim().toLowerCase();
+  if (!q) return nodeList.value;
+  return nodeList.value.filter((n: any) =>
+    [n.name, n.label, n.note, n.relay ? "能绕路" : "只做信令"]
+      .filter(Boolean)
+      .some((v: string) => String(v).toLowerCase().includes(q)),
+  );
+});
+
+const currentNodeName = computed(() => {
+  if (!nodeAddr.value) return "还没选";
+  const hit = nodeList.value.find((n: any) => n.url === nodeAddr.value);
+  return hit?.name || hit?.label || nodeName.value || "自定义节点";
+});
+
+const openNodes = () => {
+  showSettings.value = false;
+  showNodes.value = true;
+  nodeWarn.value = "";
+  if (!nodeList.value.length) void loadNodes();
+};
+
+const closeNodes = () => {
+  showNodes.value = false;
+  showSettings.value = true;
+};
+
+/** 门还开着的时候换节点，得先关掉——房间在旧节点上，换过去等于换了一把锁。 */
+const doorBusy = () => !["idle", "failed"].includes(state.value);
+
+const chooseNode = (n: any) => {
   if (!n.url) return;
-  nodeAddr.value = n.url;
+  if (doorBusy() && n.url !== nodeAddr.value) {
+    pendingNode.value = n;
+    return;
+  }
+  void applyNode(n.url, n.name || n.label || "");
+};
+
+const applyNode = async (url: string, name: string) => {
+  nodeAddr.value = url;
+  nodeName.value = name;
+  pendingNode.value = null;
+  nodeWarn.value = "";
   await persist();
+};
+
+const confirmSwap = async () => {
+  const n = pendingNode.value;
+  if (!n) return;
+  await closeDoor();
+  await applyNode(n.url, n.name || n.label || "");
+};
+
+const useCustomNode = async () => {
+  nodeWarn.value = "";
+  const code = customCode.value.trim();
+  if (!code) return;
+  const url = await invoke?.("node_url_from_code", { code }).catch(() => null);
+  if (!url) {
+    nodeWarn.value = "这串编码认不出来，检查有没有复制全";
+    return;
+  }
+  if (doorBusy() && url !== nodeAddr.value) {
+    pendingNode.value = { url, name: "自定义节点" };
+    return;
+  }
+  customCode.value = "";
+  await applyNode(url, "自定义节点");
 };
 
 watch(showSettings, (open) => {
@@ -214,7 +289,13 @@ watch(showSettings, (open) => {
 });
 const nodeAddr = ref(params.get("node") ?? "");
 const viewKey = computed(() =>
-  firstRun.value ? "first" : showSettings.value ? "settings" : state.value + (state.value === "failed" ? ":" + fail.value : ""),
+  firstRun.value
+    ? "first"
+    : showNodes.value
+      ? "nodes"
+      : showSettings.value
+        ? "settings"
+        : state.value + (state.value === "failed" ? ":" + fail.value : ""),
 );
 const relayPolicy = ref(params.get("relay") ?? "auto");
 const input = ref(params.get("input") ?? "");
@@ -434,7 +515,7 @@ const retry = () => {
             v-model="nickname"
             class="text-input"
             maxlength="24"
-            placeholder="比如：小张"
+            placeholder="起一个别人能认出的名字"
             autocomplete="off"
           />
         </label>
@@ -443,13 +524,82 @@ const retry = () => {
         </button>
       </template>
 
+      <!-- 选节点：单独一页，宽列表 + 筛选 -->
+      <template v-else-if="showNodes">
+        <h1 class="title">选个节点</h1>
+        <p class="lede">门牌号只在某个节点上有意义，先挑一个。</p>
+
+        <input
+          v-model="nodeQuery"
+          class="text-input search"
+          placeholder="筛选：香港、东京、能绕路…"
+          autocomplete="off"
+        />
+
+        <div class="node-list">
+          <button
+            v-for="n in filteredNodes"
+            :key="n.code"
+            class="node-card"
+            type="button"
+            :class="{ on: nodeAddr === n.url }"
+            @click="chooseNode(n)"
+          >
+            <span class="node-main">
+              <span class="node-name">{{ n.name || n.label }}</span>
+              <span class="node-sub">
+                {{ n.relay ? "能绕路" : "只做信令" }}<template v-if="n.note"> · {{ n.note }}</template>
+              </span>
+            </span>
+            <span class="node-pick">{{ nodeAddr === n.url ? "当前" : "选它" }}</span>
+          </button>
+          <p v-if="!filteredNodes.length" class="note">
+            {{ nodeQuery ? "没有匹配的节点。" : "列表还没拉过。点下面的「刷新列表」。" }}
+          </p>
+        </div>
+
+        <div class="nodes-head">
+          <button class="ghost tiny" type="button" :disabled="nodesBusy" @click="refreshNodes">
+            {{ nodesBusy ? "刷新中…" : "刷新列表" }}
+          </button>
+          <span class="note">{{ nodeList.length ? nodeList.length + " 个节点" : "" }}</span>
+        </div>
+
+        <div class="custom">
+          <span class="setting-label">用自己的节点</span>
+          <div class="entry-row">
+            <input
+              v-model="customCode"
+              class="entry-addr mono"
+              placeholder="粘贴节点编码"
+              spellcheck="false"
+              autocomplete="off"
+            />
+            <button class="ghost tiny" type="button" :disabled="!customCode" @click="useCustomNode">
+              使用
+            </button>
+          </div>
+          <p class="note">节点部署完会打印这一串，形如 377PN6H4MPH0…</p>
+        </div>
+
+        <p v-if="nodeWarn" class="warn">{{ nodeWarn }}</p>
+
+        <div v-if="pendingNode" class="confirm">
+          <p class="note">门还开着：换节点会先把这扇门关掉。</p>
+          <button class="primary" type="button" @click="confirmSwap">关掉并换</button>
+          <button class="ghost" type="button" @click="pendingNode = null">算了</button>
+        </div>
+
+        <button v-else class="ghost" type="button" @click="closeNodes">返回</button>
+      </template>
+
       <!-- 设置 -->
       <template v-else-if="showSettings">
         <h1 class="title">设置</h1>
         <div class="settings">
           <label class="row-setting">
             <span class="setting-label">昵称</span>
-            <input v-model="nickname" class="small-input" maxlength="24" />
+            <input v-model="nickname" class="small-input" maxlength="24" @change="persist" />
           </label>
           <div class="row-setting">
             <span class="setting-label">打不通时</span>
@@ -470,40 +620,13 @@ const retry = () => {
               </button>
             </div>
           </div>
-          <label class="row-setting wide">
+          <div class="row-setting">
             <span class="setting-label">节点</span>
-            <input
-              v-model="nodeAddr"
-              class="small-input grow mono"
-              placeholder="http://节点地址:30990"
-              spellcheck="false"
-              @change="persist"
-            />
-          </label>
-          <div class="nodes">
-            <div class="nodes-head">
-              <span class="setting-label">可选节点</span>
-              <button class="ghost tiny" type="button" :disabled="nodesBusy" @click="refreshNodes">
-                {{ nodesBusy ? "刷新中…" : "刷新列表" }}
-              </button>
+            <div class="node-current">
+              <span class="node-current-name">{{ currentNodeName }}</span>
+              <button class="ghost tiny" type="button" @click="openNodes">换节点</button>
             </div>
-            <p v-if="nodesError" class="warn">{{ nodesError }}</p>
-            <button
-              v-for="n in nodeList"
-              :key="n.code"
-              class="node-row"
-              type="button"
-              :class="{ on: nodeAddr === n.url }"
-              @click="pickNode(n)"
-            >
-              <span class="node-name">{{ n.name || n.label }}</span>
-              <span class="node-sub">{{ n.relay ? "能绕路" : "只做信令" }}<template v-if="n.note"> · {{ n.note }}</template></span>
-            </button>
-            <p v-if="!nodeList.length && !nodesBusy" class="note">
-              列表还没拉过。填上面那行地址也能用——列表只是省事。
-            </p>
           </div>
-
           <label class="row-setting">
             <span class="setting-label">外观</span>
             <button class="ghost tiny" type="button" @click="nextTheme">{{ themeLabel }}</button>
@@ -1148,6 +1271,7 @@ textarea {
   align-items: center;
   gap: 10px;
   margin-top: 8px;
+  width: 100%;
 }
 .entry-addr {
   flex: 1;
@@ -1166,6 +1290,89 @@ textarea {
 }
 .entry-box .note {
   margin-top: 8px;
+}
+
+.node-current {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.node-current-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--text);
+}
+.search {
+  width: 100%;
+  margin-top: 18px;
+}
+.node-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 12px;
+  max-height: 246px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+.node-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: transform 0.18s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.node-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+}
+.node-card:active {
+  transform: scale(0.99);
+}
+.node-card.on {
+  border-color: var(--accent-line);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.node-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+}
+.node-pick {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.node-card.on .node-pick {
+  color: var(--accent);
+}
+.custom {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--line);
+}
+.confirm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
 }
 
 .nodes {

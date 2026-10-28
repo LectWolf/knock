@@ -14,6 +14,9 @@ pub struct Settings {
     /// 节点地址，比如 http://154.36.165.162:30990
     #[serde(default)]
     pub node: String,
+    /// 节点的显示名（「香港·荃湾」）。节点自己上报的名字优先，这只是给人看的缓存。
+    #[serde(default)]
+    pub node_name: String,
     /// 本机 MC 服务在哪个端口
     #[serde(default = "default_port")]
     pub port: u16,
@@ -40,6 +43,7 @@ impl Default for Settings {
         Self {
             nickname: String::new(),
             node: String::new(),
+            node_name: String::new(),
             port: default_port(),
             relay: default_relay(),
             theme: default_theme(),

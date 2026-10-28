@@ -1,3 +1,6 @@
+// 发布版不要跟一个黑框框：控制台窗口只有在调试时才该出现。
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 //! 桌面壳：主窗口 + 托盘 + 界面命令。
 //!
 //! 分工：
@@ -159,6 +162,14 @@ fn entry_addr(st: State<'_, App>) -> Option<String> {
         .map(|a| a.to_string())
 }
 
+/// 把一串节点编码解析成能用的地址。自定义节点就靠它。
+///
+/// 解析不出来返回 `None`——界面据此说"这串码认不出来"，而不是拿它去发请求。
+#[tauri::command]
+fn node_url_from_code(code: String) -> Option<String> {
+    knock::nodes::List::url_of(code.trim())
+}
+
 /// 现在这扇门的门牌号。没开门时是空。
 #[tauri::command]
 fn door_code(st: State<'_, App>) -> Option<String> {
@@ -286,6 +297,7 @@ fn main() {
             entry_addr,
             nodes_cached,
             nodes_refresh,
+            node_url_from_code,
             guests,
             kick,
             win_minimize,
