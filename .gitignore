@@ -16,3 +16,4 @@ shots/
 .DS_Store
 Thumbs.db
 .cargo/
+build/

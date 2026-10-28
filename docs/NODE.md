@@ -97,6 +97,22 @@ sudo /usr/local/bin/knock-hub -data-dir /var/lib/knock -print-code
 - 想换身份就删掉它再启动，旧码自然失效。
 - 备份它是唯一需要备份的东西（`node.json` 不算）。
 
+## 已部署的节点
+
+| 节点 | 地址 | 节点码 | 备注 |
+|---|---|---|---|
+| 香港·荃湾 | `http://154.36.165.162:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继同在机上（`127.0.0.1:30991`，不对外） |
+
+升级二进制的方式（就地替换，留 `.old` 可回滚）：
+
+```sh
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o knock-hub ./cmd/hub
+scp -P 19508 knock-hub root@<主机>:/usr/local/bin/knock-hub.new
+ssh -p 19508 root@<主机> 'chmod +x /usr/local/bin/knock-hub.new   && cp /usr/local/bin/knock-hub /usr/local/bin/knock-hub.old   && mv /usr/local/bin/knock-hub.new /usr/local/bin/knock-hub   && systemctl restart knock-node && curl -s localhost:30990/healthz'
+```
+
+`healthz` 里必须能看到 `"proto":{"api":1,"transport":2}`，客户端靠它拒绝旧节点。
+
 ## 排查
 
 | 现象 | 先看什么 |
