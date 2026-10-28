@@ -6,15 +6,16 @@
 
 1. ~~没有 Tauri 壳~~ **已补**：`main.rs` + `tauri.conf.json` + `build.rs` + 图标 + 托盘。
    窗口能起来，关窗口缩托盘实测有效（`IsWindowVisible` 为 False，进程仍在）。
-2. **界面没接 Rust**：昵称、门牌号、"门里的人"全是 URL 参数摆出来的。
-3. **名册没有推送通道**：`SessionList` 有了、`serve_gated` 也接上了，但界面拿不到更新（缺 Tauri command / event）。
+2. ~~界面没接 Rust~~ **已接**：`load_settings / save_settings / open_door / knock / close_door / door_state / guests / kick` 八个命令，
+   状态走 `knock://state` 事件、名册每秒拉一次。**但只在浏览器外验证了"读设置"这一段**，开门/敲门全靠网络，没端到端跑通。
+3. **名册是轮询不是推送**：`guests` 每秒拉一次。人多了没问题，但应该改成 transport 在 join/kick 时主动 emit。
 
 4. ~~没有托盘~~ **已补**：左键唤回窗口，右键菜单（打开主界面 / 关门 / 退出）。
    仍未接的是"关门"菜单项：现在只发 `knock://tray` 事件，界面还没监听。
 5. **关门只是界面动作**：`关门` 会回到 idle，但还没真的调节点 DELETE、也没断服里的人。
 
 5. **没出过安装包**：`npm run tauri build`（release + NSIS/MSI）没跑过，只验证了 debug 壳。
-6. **壳里没有单实例**：二次启动会开出第二个 Knock，两个门同时开着。
+6. ~~壳里没有单实例~~ **已补**：`tauri-plugin-single-instance`，二次启动只把窗口叫出来。
 
 ## 协议与节点
 

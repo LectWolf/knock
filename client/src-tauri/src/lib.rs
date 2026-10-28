@@ -19,6 +19,7 @@ pub mod policy;
 pub mod resolve;
 pub mod room;
 pub mod sessions;
+pub mod settings;
 pub mod state;
 pub mod transport;
 

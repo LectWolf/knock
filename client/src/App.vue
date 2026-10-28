@@ -1,5 +1,10 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
+
+/* 桌面壳里跑的时候，状态和命令都来自 Rust；用浏览器打开时退回演示模式（URL 参数摆状态） */
+const shell: any = (window as any).__TAURI__;
+const invoke: ((cmd: string, args?: any) => Promise<any>) | undefined = shell?.core?.invoke;
+const isShell = typeof invoke === "function";
 
 /* 状态机是 Rust 那边的唯一真相，界面只渲染它。
    这一版还没接 Tauri 命令，先用 URL 参数把各状态摆出来给人看；
@@ -66,7 +71,63 @@ const kick = (id: string) => {
   guests.value = guests.value.filter((g) => g.id !== id);
 };
 
+/* 和 Rust 对齐：状态由 transport 推来，名册每秒拉一次 */
+const loadSettings = async () => {
+  if (!invoke) return;
+  const s = await invoke("load_settings").catch(() => null);
+  if (!s) return;
+  nickname.value = s.nickname ?? "";
+  server.value = String(s.port ?? 25565);
+  theme.value = (s.theme as Theme) ?? "auto";
+  relayPolicy.value = s.relay ?? "auto";
+  nodeAddr.value = s.node ?? "";
+  if (s.nickname) firstRun.value = false;
+};
+
+const persist = async () => {
+  if (!invoke) return;
+  await invoke("save_settings", {
+    settings: {
+      nickname: nickname.value,
+      node: nodeAddr.value,
+      port: Number(server.value) || 25565,
+      relay: relayPolicy.value,
+      theme: theme.value,
+    },
+  }).catch(() => {});
+};
+
+const pull = async () => {
+  if (!invoke) return;
+  const s = await invoke("door_state").catch(() => null);
+  if (s) state.value = s as ConnState;
+  const gs = await invoke("guests").catch(() => null);
+  if (Array.isArray(gs)) {
+    guests.value = gs.map((g: any) => ({
+      id: g.id,
+      nick: g.nickname,
+      mode: g.via_relay ? "relay" : "direct",
+      since: g.secs < 60 ? `${g.secs} 秒` : `${Math.floor(g.secs / 60)} 分钟`,
+    }));
+  }
+};
+
+onMounted(async () => {
+  if (!isShell) return;
+  await loadSettings();
+  await pull();
+  shell?.event?.listen?.("knock://state", (e: any) => {
+    state.value = e.payload.state as ConnState;
+    if (e.payload.fail) fail.value = e.payload.fail;
+  });
+  shell?.event?.listen?.("knock://tray", (msg: string) => {
+    if (msg === "close_door") void closeDoor();
+  });
+  window.setInterval(pull, 1000);
+});
+
 const showSettings = ref(params.get("panel") === "settings");
+const nodeAddr = ref(params.get("node") ?? "");
 const viewKey = computed(() =>
   firstRun.value ? "first" : showSettings.value ? "settings" : state.value + (state.value === "failed" ? ":" + fail.value : ""),
 );
@@ -107,8 +168,9 @@ const canKnock = computed(() => input.value.length === 6);
 
 const cleanNick = computed(() => nickname.value.trim().slice(0, 24));
 const canSaveNick = computed(() => cleanNick.value.length > 0);
-const saveNick = () => {
+const saveNick = async () => {
   nickname.value = cleanNick.value;
+  if (isShell) await persist();
   firstRun.value = false;
 };
 
@@ -141,8 +203,9 @@ const status = computed(() => {
 /* 门开了多久 / 关门 */
 const opened = ref(Number(params.get("open") ?? "12"));
 const confirmClose = ref(false);
-const closeDoor = () => {
+const closeDoor = async () => {
   confirmClose.value = false;
+  if (isShell) await invoke!("close_door").catch(() => {});
   state.value = "idle";
   opened.value = 0;
 };
@@ -161,12 +224,20 @@ const copyCode = async () => {
 };
 onBeforeUnmount(() => window.clearTimeout(timer));
 
-const knock = () => {
+const knock = async () => {
   if (!canKnock.value) return;
+  if (isShell) {
+    await invoke!("knock", { invite: input.value }).catch(() => {});
+    return;
+  }
   state.value = "punching";
 };
-const open = () => {
+const open = async () => {
   showOpen.value = false;
+  if (isShell) {
+    await invoke!("open_door", { port: Number(server.value) || 25565 }).catch(() => {});
+    return;
+  }
   state.value = "creating";
 };
 const retry = () => {
