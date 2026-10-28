@@ -39,6 +39,10 @@ const winMin = () => void invoke?.("win_minimize");
 let dragging: { x: number; y: number; wx: number; wy: number } | null = null;
 const startDrag = async (e: MouseEvent) => {
   if (!isShell || e.button !== 0) return;
+  // 点到能操作的东西就别拖窗：按钮、输入框、可滚动区、可选中文本
+  const el = e.target as HTMLElement | null;
+  if (el?.closest("button, input, textarea, select, a, code, .guest-list, .node-list, .entry-addr, .primary, .ghost"))
+    return;
   const pos = await invoke?.("win_pos").catch(() => null);
   if (!pos) return;
   dragging = { x: e.screenX, y: e.screenY, wx: pos[0], wy: pos[1] };
@@ -486,19 +490,18 @@ const retry = () => {
 </script>
 
 <template>
-  <div class="shell">
-    <header class="bar" @mousedown="startDrag">
-      <div class="mark">
-        <span class="dot" aria-hidden="true"></span>
-        <span class="word">Knock</span>
+  <div class="shell" @mousedown="startDrag">
+    <header class="bar">
+      <div class="lights">
+        <button class="light min" type="button" aria-label="最小化" title="最小化" @click.stop="winMin">
+          <span aria-hidden="true"></span>
+        </button>
+        <button class="light close" type="button" aria-label="收进托盘" title="收进托盘" @click.stop="winHide">
+          <span aria-hidden="true"></span>
+        </button>
       </div>
-      <div class="win-btns">
-        <button class="win-btn" type="button" aria-label="最小化" title="最小化" @click.stop="winMin">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6.5h6" /></svg>
-        </button>
-        <button class="win-btn close" type="button" aria-label="收进托盘" title="收进托盘" @click.stop="winHide">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5" /></svg>
-        </button>
+      <div class="mark">
+        <span class="word">Knock</span>
       </div>
     </header>
 
@@ -665,7 +668,8 @@ const retry = () => {
 
         <div class="expander" :class="{ open: mode !== 'none' }">
           <div class="expander-inner">
-            <div v-if="mode === 'knock'" class="panel-inline">
+            <Transition name="panel" mode="out-in">
+            <div v-if="mode === 'knock'" class="panel-inline" key="knock">
               <label class="field">
                 <span class="field-label">门牌号</span>
                 <input
@@ -682,7 +686,7 @@ const retry = () => {
               <button class="primary" type="button" :disabled="!canKnock" @click="knock">敲门</button>
             </div>
 
-            <div v-else class="panel-inline">
+            <div v-else-if="mode === 'open'" class="panel-inline" key="open">
               <label class="field">
                 <span class="field-label">你的服务在</span>
                 <input
@@ -693,10 +697,10 @@ const retry = () => {
                   placeholder="25565"
                 />
               </label>
-              <p class="note center">没改过就是 25565。开好门把这串号发给他。</p>
               <p v-if="warn" class="warn">{{ warn }}</p>
               <button class="primary" type="button" @click="open">开门</button>
             </div>
+            </Transition>
           </div>
         </div>
       </template>
@@ -725,7 +729,12 @@ const retry = () => {
               <span>门里的人</span>
               <span class="count mono">{{ guests.length }}</span>
             </div>
-            <p v-if="guests.length === 0" class="note">还没人敲，门一直开着。</p>
+            <div v-if="guests.length === 0" class="waiting" role="status" aria-label="等你朋友敲门">
+              <span class="wait-ring" aria-hidden="true"></span>
+              <span class="wait-ring delay1" aria-hidden="true"></span>
+              <span class="wait-ring delay2" aria-hidden="true"></span>
+              <span class="wait-dot" aria-hidden="true"></span>
+            </div>
             <TransitionGroup v-else tag="ul" name="guest" class="guest-list">
               <li v-for="g in guests" :key="g.id" class="guest">
                 <span class="guest-name">{{ g.nick }}</span>
@@ -740,7 +749,7 @@ const retry = () => {
               还有 {{ guests.length - 4 }} 人，往下滚
             </p>
           </div>
-          <p class="hint">把门牌号发给他，他就能进来。你在门就开着。</p>
+          <p class="hint">把门牌号发给他，他就能进来。</p>
 
           <div v-if="!confirmClose" class="door-actions">
             <button class="ghost danger" type="button" @click="confirmClose = true">关门</button>
@@ -822,7 +831,6 @@ const retry = () => {
           </svg>
         </button>
       </div>
-      <span class="note inline">{{ state === "waiting" ? "关掉窗口门还开着" : "" }}</span>
       <span class="mono version">v0.1</span>
     </footer>
   </div>
@@ -845,48 +853,91 @@ const retry = () => {
 .bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   /* 自绘标题栏：这一整条都能拖动窗口 */
-  gap: 10px;
+  gap: 14px;
   user-select: none;
   -webkit-user-select: none;
 }
 .bar .mark {
   pointer-events: none; /* 拖动优先，别让文字吃掉手势 */
 }
-.win-btns {
+/* 窗口按钮：两点，够小、够安静；鼠标靠上去才亮 */
+.lights {
   display: flex;
-  gap: 2px;
-  margin-left: -4px;
+  align-items: center;
+  gap: 8px;
 }
-.win-btn {
-  width: 32px;
-  height: 26px;
-  display: grid;
-  place-items: center;
-  color: var(--muted);
-  background: transparent;
+.light {
+  width: 12px;
+  height: 12px;
+  padding: 0;
   border: none;
-  border-radius: var(--r-sm);
+  border-radius: 50%;
+  background: var(--line-strong);
+  opacity: 0.9;
   cursor: pointer;
-  transition: background 0.12s ease, color 0.12s ease;
+  position: relative;
+  transition: background 0.18s ease, transform 0.18s cubic-bezier(0.32, 0.72, 0, 1);
 }
-.win-btn svg {
-  width: 13px;
-  height: 13px;
-  fill: none;
-  stroke: currentColor;
-  stroke-width: 1.3;
-  stroke-linecap: round;
+.light span {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity 0.15s ease;
 }
-.win-btn:hover {
-  color: var(--text);
-  background: var(--surface-2);
+.light.min span::before {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 5.5px;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.45);
 }
-.win-btn.close:hover {
-  color: #fff;
-  background: #c0392b;
+.light.close span::before,
+.light.close span::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 5.5px;
+  height: 1px;
+  background: rgba(0, 0, 0, 0.5);
 }
+.light.close span::before {
+  transform: rotate(45deg);
+}
+.light.close span::after {
+  transform: rotate(-45deg);
+}
+.lights:hover .light span {
+  opacity: 1;
+}
+.light:hover {
+  transform: scale(1.08);
+}
+.light.min {
+  background: #d9a05b;
+}
+.light.close {
+  background: #cf6a5c;
+}
+.light.min:hover {
+  background: #e8b871;
+}
+.light.close:hover {
+  background: #e07a6a;
+}
+.light:active {
+  transform: scale(0.94);
+}
+
+.bar .mark {
+  pointer-events: none; /* 拖动优先，别让文字吃掉手势 */
+}
+
 .mark {
   display: flex;
   align-items: center;
@@ -1290,6 +1341,76 @@ textarea {
 }
 .entry-box .note {
   margin-top: 8px;
+}
+
+/* 等人敲门：三圈扩散 + 一个心跳点 */
+.waiting {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: 72px;
+  margin-top: 4px;
+}
+.wait-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: breathe 2.4s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+}
+.wait-ring {
+  position: absolute;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 1px solid var(--accent-line);
+  opacity: 0;
+  animation: ripple 2.4s cubic-bezier(0.32, 0.72, 0, 1) infinite;
+}
+.wait-ring.delay1 {
+  animation-delay: 0.8s;
+}
+.wait-ring.delay2 {
+  animation-delay: 1.6s;
+}
+@keyframes ripple {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  18% {
+    opacity: 0.55;
+  }
+  100% {
+    transform: scale(2.5);
+    opacity: 0;
+  }
+}
+@keyframes breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.35);
+    opacity: 1;
+  }
+}
+
+/* 敲门/开门面板互换 */
+.panel-enter-active,
+.panel-leave-active {
+  transition: opacity 0.2s cubic-bezier(0.32, 0.72, 0, 1),
+    transform 0.26s cubic-bezier(0.32, 0.72, 0, 1);
+}
+.panel-enter-from {
+  opacity: 0;
+  transform: translateY(6px) scale(0.99);
+}
+.panel-leave-to {
+  opacity: 0;
+  transform: translateY(-6px) scale(0.99);
 }
 
 .node-current {
