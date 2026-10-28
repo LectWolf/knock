@@ -519,6 +519,8 @@ const retry = () => {
 
 <style scoped>
 .shell {
+  user-select: none;
+  -webkit-user-select: none;
   min-height: 100%;
   max-width: 460px;
   margin: 0 auto;
@@ -665,6 +667,12 @@ const retry = () => {
   font-size: 12px;
   color: var(--muted);
 }
+input,
+textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
 .code-input {
   width: 100%;
   padding: 13px 14px;
@@ -883,7 +891,8 @@ const retry = () => {
 }
 .choice-card.on {
   border-color: var(--accent-line);
-  background: var(--accent-soft);
+  background: var(--surface);
+  box-shadow: inset 0 0 0 1px var(--accent-line), 0 0 0 3px var(--accent-soft);
 }
 .choice-name {
   font-size: 14px;
