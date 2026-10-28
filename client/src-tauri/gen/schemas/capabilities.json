@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"主窗口只需要基础能力：读设置、写剪贴板。网络能力全在 Rust 侧，不给界面。","local":true,"windows":["main"],"permissions":["core:default"]}}

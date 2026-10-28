@@ -1,0 +1,36 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Knock",
+  "version": "0.1.0",
+  "identifier": "cc.mcii.knock",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "devUrl": "http://localhost:5173",
+    "beforeBuildCommand": "npm run build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Knock",
+        "width": 460,
+        "height": 700,
+        "minWidth": 380,
+        "minHeight": 560,
+        "resizable": true,
+        "center": true,
+        "titleBarStyle": "Visible",
+        "backgroundColor": "#0D0F12"
+      }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.ico"],
+    "shortDescription": "Minecraft 联机工具",
+    "longDescription": "开门拿到门牌号，朋友敲门就进服。自托管节点，直连优先、失败绕路。"
+  }
+}

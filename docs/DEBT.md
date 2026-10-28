@@ -4,14 +4,17 @@
 
 ## 会阻碍「点开就有窗口」的
 
-1. **没有 Tauri 壳**：`client/src-tauri` 里只有 lib 模块，缺 `main.rs`、`tauri.conf.json`、`build.rs`。
-   Rust 核心 96 项测试全绿，但它现在装不进一个窗口——这是最硬的一条。
+1. ~~没有 Tauri 壳~~ **已补**：`main.rs` + `tauri.conf.json` + `build.rs` + 图标 + 托盘。
+   窗口能起来，关窗口缩托盘实测有效（`IsWindowVisible` 为 False，进程仍在）。
 2. **界面没接 Rust**：昵称、门牌号、"门里的人"全是 URL 参数摆出来的。
 3. **名册没有推送通道**：`SessionList` 有了、`serve_gated` 也接上了，但界面拿不到更新（缺 Tauri command / event）。
 
-4. **没有托盘**：桌面端要常驻托盘，默认"关窗口 = 缩到托盘，门继续开着"，退出只能从托盘菜单走。
-   这一条依赖第 1 条——没有 Tauri 壳就没有托盘。
+4. ~~没有托盘~~ **已补**：左键唤回窗口，右键菜单（打开主界面 / 关门 / 退出）。
+   仍未接的是"关门"菜单项：现在只发 `knock://tray` 事件，界面还没监听。
 5. **关门只是界面动作**：`关门` 会回到 idle，但还没真的调节点 DELETE、也没断服里的人。
+
+5. **没出过安装包**：`npm run tauri build`（release + NSIS/MSI）没跑过，只验证了 debug 壳。
+6. **壳里没有单实例**：二次启动会开出第二个 Knock，两个门同时开着。
 
 ## 协议与节点
 

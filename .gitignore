@@ -15,3 +15,4 @@ shots/
 .env
 .DS_Store
 Thumbs.db
+.cargo/
