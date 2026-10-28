@@ -200,7 +200,22 @@ watch(input, (v) => {
   const c = cleanCode(v);
   if (c !== v) input.value = c;
 });
+/* 门牌号只可能是大写字母和数字：边打边清，别等提交才报错 */
+watch(input, (v) => {
+  const clean = v.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 6);
+  if (clean !== v) input.value = clean;
+});
+/* 服务号同理，只留数字，最多 5 位 */
+watch(server, (v) => {
+  const clean = v.replace(/\D/g, "").slice(0, 5);
+  if (clean !== v) server.value = clean;
+});
+
 const canKnock = computed(() => input.value.length === 6);
+const validPort = computed(() => {
+  const n = Number(server.value);
+  return Number.isInteger(n) && n >= 1 && n <= 65535;
+});
 
 const cleanNick = computed(() => nickname.value.trim().slice(0, 24));
 const canSaveNick = computed(() => cleanNick.value.length > 0);
