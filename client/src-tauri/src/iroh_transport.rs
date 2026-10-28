@@ -25,6 +25,15 @@ use crate::transport::{StateSink, Target, Transport, TransportError};
 
 type Sink = Arc<Mutex<Option<StateSink>>>;
 
+/// 多久续一次命。节点那边的房间寿命是 10 分钟，60 秒留足余量。
+fn announce_every() -> Duration {
+    std::env::var("KNOCK_ANNOUNCE_SECS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap_or(Duration::from_secs(60))
+}
+
 /// 真实传输。内部一个后台线程跑 tokio 运行时，状态机是唯一真相。
 pub struct IrohTransport {
     client: Arc<dyn RoomClient + Send + Sync>,
@@ -244,6 +253,13 @@ impl Ctx {
         }
 
         let code = room.code.clone();
+
+        // 心跳要用的那几样，先留一份；下面那次 announce 会把原件吃掉
+        let hb_code = code.clone();
+        let hb_token = token.clone();
+        let hb_id = host_id.clone();
+        let hb_addrs = addrs.clone();
+
         let client = Arc::clone(&self.client);
         let announced = tokio::task::spawn_blocking(move || {
             client.announce(&code, &token, &host_id, &addrs)
@@ -255,6 +271,34 @@ impl Ctx {
             self.emit(Event::RoomRegisterFailed);
             return Ok(());
         }
+
+        // 心跳：房间寿命是从**最后一次 announce** 算的，不续命十分钟后门就自己没了，
+        // 而界面上还写着"门开着"——这是最伤信任的一种不一致。
+        let hb_client = Arc::clone(&self.client);
+        let hb_alive = Arc::clone(&self.running);
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(announce_every()).await;
+                if !hb_alive.load(Ordering::SeqCst) {
+                    break;
+                }
+                let client = Arc::clone(&hb_client);
+                let (code, token, id, addrs) = (
+                    hb_code.clone(),
+                    hb_token.clone(),
+                    hb_id.clone(),
+                    hb_addrs.clone(),
+                );
+                let sent = tokio::task::spawn_blocking(move || {
+                    client.announce(&code, &token, &id, &addrs)
+                })
+                .await;
+                // 房间已经没了（被回收/被节点拒），再刷也是空转
+                if !matches!(sent, Ok(Ok(()))) {
+                    break;
+                }
+            }
+        });
 
         // 有人敲门就把 MC 流量接进本机服务端；谁能进来由名册说了算
         let target: SocketAddr = ([127, 0, 0, 1], port).into();

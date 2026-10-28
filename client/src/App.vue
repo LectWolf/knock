@@ -266,17 +266,38 @@ const copyCode = async () => {
 };
 onBeforeUnmount(() => window.clearTimeout(timer));
 
+const warn = ref("");
+
 const knock = async () => {
   if (!canKnock.value) return;
+  warn.value = "";
   if (isShell) {
-    await invoke!("knock", { invite: input.value }).catch(() => {});
+    try {
+      await invoke!("knock", { invite: input.value });
+    } catch (e: any) {
+      warn.value = explain(e);
+    }
     return;
   }
   state.value = "punching";
 };
+
+/* 把 Rust 那边的中文错误原样露出来；技术错误归到一句人话 */
+const explain = (e: any) => {
+  const raw = typeof e === "string" ? e : (e?.message ?? "");
+  if (raw.includes("先添加一个节点")) return "还没填节点，去设置里加一个";
+  if (raw.includes("IllegalEvent")) return "现在这个状态没法做这件事";
+  return raw ? "没做成，稍后再试" : "没做成，稍后再试";
+};
 const open = async () => {
+  warn.value = "";
   if (isShell) {
-    await invoke!("open_door", { port: Number(server.value) || 25565 }).catch(() => {});
+    try {
+      await invoke!("open_door", { port: Number(server.value) || 25565 });
+    } catch (e: any) {
+      warn.value = explain(e);
+      state.value = "idle";
+    }
     return;
   }
   state.value = "creating";
@@ -352,6 +373,16 @@ const retry = () => {
               </button>
             </div>
           </div>
+          <label class="row-setting wide">
+            <span class="setting-label">节点</span>
+            <input
+              v-model="nodeAddr"
+              class="small-input grow mono"
+              placeholder="http://节点地址:30990"
+              spellcheck="false"
+              @change="persist"
+            />
+          </label>
           <label class="row-setting">
             <span class="setting-label">外观</span>
             <button class="ghost tiny" type="button" @click="nextTheme">{{ themeLabel }}</button>
@@ -364,7 +395,7 @@ const retry = () => {
       <template v-else-if="state === 'idle'">
         <div class="choice" :class="{ picked: mode !== 'none' }">
           <h1 class="title">今天要哪一头</h1>
-          <p class="lede">两边都只用一个门牌号，不用配网络。</p>
+          <p class="lede">开门的人发号，敲门的人输号。</p>
 
           <div class="choice-row">
             <button
@@ -374,7 +405,7 @@ const retry = () => {
               @click="pick_('knock')"
             >
               <span class="choice-name">敲门</span>
-              <span class="choice-sub">我有门牌号，想进他的服务器</span>
+              <span class="choice-sub">拿到号就能进</span>
             </button>
             <button
               class="choice-card"
@@ -383,7 +414,7 @@ const retry = () => {
               @click="pick_('open')"
             >
               <span class="choice-name">我要开门</span>
-              <span class="choice-sub">我开了服，让朋友进来</span>
+              <span class="choice-sub">我开了服，等朋友</span>
             </button>
           </div>
         </div>
@@ -403,15 +434,23 @@ const retry = () => {
                   placeholder="A7K2M9"
                 />
               </label>
+              <p v-if="warn" class="warn">{{ warn }}</p>
               <button class="primary" type="button" :disabled="!canKnock" @click="knock">敲门</button>
             </div>
 
             <div v-else class="panel-inline">
               <label class="field">
                 <span class="field-label">你的服务在</span>
-                <input v-model="server" class="small-input mono" inputmode="numeric" maxlength="5" />
+                <input
+                  v-model="server"
+                  class="code-input port-input mono"
+                  inputmode="numeric"
+                  maxlength="5"
+                  placeholder="25565"
+                />
               </label>
-              <p class="note">没改过就是 25565。开好门之后，把这串门牌号发给他。</p>
+              <p class="note center">没改过就是 25565。开好门把这串号发给他。</p>
+              <p v-if="warn" class="warn">{{ warn }}</p>
               <button class="primary" type="button" @click="open">开门</button>
             </div>
           </div>
@@ -639,10 +678,14 @@ const retry = () => {
   letter-spacing: -0.01em;
 }
 .lede {
-  margin: 0;
   color: var(--text-soft);
   font-size: 13.5px;
-  max-width: 30ch;
+  line-height: 1.6;
+  /* 居中：限宽之后必须自己居中，否则限宽框贴着左边，看起来就是歪的 */
+  max-width: 26ch;
+  margin: 0 auto;
+  text-align: center;
+  text-wrap: balance;
 }
 .hint {
   margin: 2px 0 0;
@@ -721,7 +764,12 @@ textarea {
   border-radius: var(--r-sm);
   outline: none;
 }
-.small-input:focus {
+.port-input {
+  letter-spacing: 0.14em;
+  font-size: 19px;
+  padding: 12px 14px;
+}
+.port-input:focus {
   border-color: var(--accent-line);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
@@ -939,8 +987,8 @@ textarea {
 }
 .panel-inline {
   width: 100%;
-  max-width: 320px;
-  margin: 16px auto 2px;
+  /* 不设 max-width：要和上面两张卡片同宽，否则上下两条边对不齐 */
+  margin: 16px 0 2px;
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -948,6 +996,29 @@ textarea {
 }
 .panel-inline .field {
   max-width: none;
+}
+
+.warn {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--danger, #d2603a);
+  background: color-mix(in oklab, var(--danger, #d2603a) 12%, transparent);
+  border: 1px solid color-mix(in oklab, var(--danger, #d2603a) 28%, transparent);
+  border-radius: var(--r-sm);
+}
+.row-setting.wide {
+  grid-template-columns: 58px 1fr;
+}
+.setting-label {
+  white-space: nowrap;
+}
+.small-input.grow {
+  width: 100%;
+  font-size: 12.5px;
+  letter-spacing: 0;
 }
 
 .foot-left {

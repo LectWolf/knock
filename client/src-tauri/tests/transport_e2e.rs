@@ -265,3 +265,43 @@ async fn a_failed_punch_falls_back_to_the_relay() {
     assert_eq!(&buf[..n], b"relayed bytes", "经中继的数据必须原样到达");
     guest.close();
 }
+
+/// 心跳：房间寿命短的时候，房主只要还在，门就不该被节点回收。
+///
+/// 这条是用"短 TTL + 短心跳"把十分钟的等待压到十几秒：
+/// 本地节点配 `room_ttl: 15s`，`KNOCK_ANNOUNCE_SECS=6`，
+/// 然后让门开着睡过 TTL——心跳没生效的话，查码一定是 code_not_found。
+#[tokio::test]
+#[ignore]
+async fn a_heartbeat_keeps_the_door_from_expiring() {
+    use knock::room::RoomError;
+
+    let base = env("KNOCK_NODE_URL");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_sink, _log) = recorder();
+    host.on_state(_sink);
+    host.connect(Target::Open { port: 25565 }).expect("房主受理");
+
+    wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
+    wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+
+    // 睡过 TTL：没心跳的话这里房间已经没了
+    let ttl = std::env::var("KNOCK_TTL_SECS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(25);
+    println!("门开着，睡 {ttl} 秒…");
+    tokio::time::sleep(Duration::from_secs(ttl)).await;
+
+    match client.lookup(&code) {
+        Ok(room) => println!("{} 秒后门还在（host_id={:?}）", ttl, room.host_id.is_some()),
+        Err(RoomError::NotFound) => panic!("心跳没续上：门在 {ttl} 秒后过期了"),
+        Err(e) => panic!("查码出错：{e:?}"),
+    }
+
+    assert_eq!(host.state(), ConnState::Waiting, "睡这么久，房主状态不该变");
+}
