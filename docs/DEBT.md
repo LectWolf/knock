@@ -14,7 +14,9 @@
    仍未接的是"关门"菜单项：现在只发 `knock://tray` 事件，界面还没监听。
 5. **关门只是界面动作**：`关门` 会回到 idle，但还没真的调节点 DELETE、也没断服里的人。
 
-5. **没出过安装包**：`npm run tauri build`（release + NSIS/MSI）没跑过，只验证了 debug 壳。
+5. **出过独立可执行文件，没出过安装包**：`npx tauri build --no-bundle` 产出
+   `target/release/knock.exe`（22 MB，资源已内嵌，不依赖 vite），实测能独立起窗口。
+   还差 NSIS/MSI 打包（首次打包要联网拉工具链）。
 6. ~~壳里没有单实例~~ **已补**：`tauri-plugin-single-instance`，二次启动只把窗口叫出来。
 
 ## 协议与节点

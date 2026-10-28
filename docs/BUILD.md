@@ -7,7 +7,11 @@ cd client
 npm install
 npm run dev            # 前端热更新，浏览器里看界面：http://localhost:5173
 npm run tauri dev      # 带壳跑（要 vite 在 5173，Tauri 会自己起）
-npm run tauri build    # 出安装包：目标在 src-tauri/target/release/bundle/
+npx tauri build --no-bundle        # 只出可执行文件（快，不联网）：src-tauri/target/release/knock.exe
+npm run tauri build               # 出安装包（NSIS/MSI，首次要联网拉工具链）
+
+> 只用 `cargo build --release` 是不够的：Tauri 靠 `custom-protocol` feature 决定
+> "内嵌前端"还是"连 dev 服务器"，`tauri build` 会帮你带这个 feature，裸 cargo 不会。
 ```
 
 **国内构建先配镜像**，否则拉 crates.io 会慢到以为卡死（实测 5 分钟 2 个包）：
