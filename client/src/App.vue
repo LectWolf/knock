@@ -34,7 +34,30 @@ const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T)
 };
 
 const winMin = () => void invoke?.("win_minimize");
-const winMax = () => void invoke?.("win_toggle_max");
+/* 自己实现拖窗：记下起点的窗口位置和鼠标屏幕坐标，鼠标动多少窗口就动多少 */
+let dragging: { x: number; y: number; wx: number; wy: number } | null = null;
+const startDrag = async (e: MouseEvent) => {
+  if (!isShell || e.button !== 0) return;
+  const pos = await invoke?.("win_pos").catch(() => null);
+  if (!pos) return;
+  dragging = { x: e.screenX, y: e.screenY, wx: pos[0], wy: pos[1] };
+  window.addEventListener("mousemove", onDrag);
+  window.addEventListener("mouseup", endDrag, { once: true });
+};
+const onDrag = (e: MouseEvent) => {
+  if (!dragging) return;
+  const x = dragging.wx + (e.screenX - dragging.x);
+  const y = dragging.wy + (e.screenY - dragging.y);
+  void invoke?.("win_set_pos", { x, y });
+};
+const endDrag = () => {
+  dragging = null;
+  window.removeEventListener("mousemove", onDrag);
+};
+const mode = ref<"none" | "knock" | "open">(pick("mode", ["none", "knock", "open"], "none"));
+const pick_ = (m: "knock" | "open") => {
+  mode.value = mode.value === m ? "none" : m;
+};
 const winHide = () => void invoke?.("win_hide");
 
 const state = ref<ConnState>(
@@ -138,7 +161,6 @@ const viewKey = computed(() =>
 const relayPolicy = ref(params.get("relay") ?? "auto");
 const input = ref(params.get("input") ?? "");
 const server = ref("25565");
-const showOpen = ref(false);
 
 /* —— 主题：默认跟随系统，可手动覆盖 —— */
 watch(
@@ -237,7 +259,6 @@ const knock = async () => {
   state.value = "punching";
 };
 const open = async () => {
-  showOpen.value = false;
   if (isShell) {
     await invoke!("open_door", { port: Number(server.value) || 25565 }).catch(() => {});
     return;
@@ -251,43 +272,16 @@ const retry = () => {
 
 <template>
   <div class="shell">
-    <header class="bar" data-tauri-drag-region>
+    <header class="bar" @mousedown="startDrag">
       <div class="mark">
         <span class="dot" aria-hidden="true"></span>
         <span class="word">Knock</span>
-        <span class="sep">·</span>
-        <span class="sub">联机工具</span>
       </div>
-      <div class="bar-right">
-        <button class="icon-btn" type="button" @click="nextTheme" :title="'外观：' + themeLabel" :aria-label="'外观：' + themeLabel">
-          <svg v-if="theme === 'auto'" viewBox="0 0 24 24" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="12" rx="2" />
-            <path d="M8 20h8" />
-          </svg>
-          <svg v-else-if="theme === 'light'" viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="4" />
-            <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" />
-          </svg>
-          <svg v-else viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" />
-          </svg>
-        </button>
-        <button class="icon-btn" type="button" @click="showSettings = !showSettings" aria-label="设置" title="设置">
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
-          </svg>
-        </button>
-      </div>
-
       <div class="win-btns">
-        <button class="win-btn" type="button" aria-label="最小化" title="最小化" @click="winMin">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6h6" /></svg>
+        <button class="win-btn" type="button" aria-label="最小化" title="最小化" @click.stop="winMin">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6.5h6" /></svg>
         </button>
-        <button class="win-btn" type="button" aria-label="最大化" title="最大化" @click="winMax">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1" /></svg>
-        </button>
-        <button class="win-btn close" type="button" aria-label="收进托盘" title="收进托盘" @click="winHide">
+        <button class="win-btn close" type="button" aria-label="收进托盘" title="收进托盘" @click.stop="winHide">
           <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5" /></svg>
         </button>
       </div>
@@ -352,34 +346,59 @@ const retry = () => {
 
       <!-- 未开始：输入门牌号 -->
       <template v-else-if="state === 'idle'">
-        <h1 class="title">敲一扇门</h1>
-        <p class="lede">拿到门牌号，敲一下就进去了。</p>
+        <div class="choice" :class="{ picked: mode !== 'none' }">
+          <h1 class="title">今天要哪一头</h1>
+          <p class="lede">两边都只用一个门牌号，不用配网络。</p>
 
-        <label class="field">
-          <span class="field-label">门牌号</span>
-          <input
-            v-model="input"
-            class="code-input mono"
-            inputmode="latin"
-            autocomplete="off"
-            spellcheck="false"
-            maxlength="6"
-            placeholder="A7K2M9"
-          />
-        </label>
+          <div class="choice-row">
+            <button
+              class="choice-card"
+              type="button"
+              :class="{ on: mode === 'knock' }"
+              @click="pick_('knock')"
+            >
+              <span class="choice-name">敲门</span>
+              <span class="choice-sub">我有门牌号，想进他的服务器</span>
+            </button>
+            <button
+              class="choice-card"
+              type="button"
+              :class="{ on: mode === 'open' }"
+              @click="pick_('open')"
+            >
+              <span class="choice-name">我要开门</span>
+              <span class="choice-sub">我开了服，让朋友进来</span>
+            </button>
+          </div>
+        </div>
 
-        <button class="primary" type="button" :disabled="!canKnock" @click="knock">
-          敲门
-        </button>
-        <button class="ghost" type="button" @click="showOpen = !showOpen">我要开门</button>
+        <div class="expander" :class="{ open: mode !== 'none' }">
+          <div class="expander-inner">
+            <div v-if="mode === 'knock'" class="panel-inline">
+              <label class="field">
+                <span class="field-label">门牌号</span>
+                <input
+                  v-model="input"
+                  class="code-input mono"
+                  inputmode="latin"
+                  autocomplete="off"
+                  spellcheck="false"
+                  maxlength="6"
+                  placeholder="A7K2M9"
+                />
+              </label>
+              <button class="primary" type="button" :disabled="!canKnock" @click="knock">敲门</button>
+            </div>
 
-        <div v-if="showOpen" class="panel">
-          <label class="field compact">
-            <span class="field-label">你的服务在</span>
-            <input v-model="server" class="small-input mono" inputmode="numeric" maxlength="5" />
-          </label>
-          <p class="note">没改过就是 25565。开好门之后，把这串门牌号发给他。</p>
-          <button class="primary" type="button" @click="open">开门</button>
+            <div v-else class="panel-inline">
+              <label class="field">
+                <span class="field-label">你的服务在</span>
+                <input v-model="server" class="small-input mono" inputmode="numeric" maxlength="5" />
+              </label>
+              <p class="note">没改过就是 25565。开好门之后，把这串门牌号发给他。</p>
+              <button class="primary" type="button" @click="open">开门</button>
+            </div>
+          </div>
         </div>
       </template>
 
@@ -471,7 +490,28 @@ const retry = () => {
     </main>
 
     <footer class="foot">
-      <span class="foot-note">{{ state === "waiting" ? "关掉这个窗口就会关门" : "" }}</span>
+      <div class="foot-left">
+        <button class="icon-btn" type="button" :title="'外观：' + themeLabel" :aria-label="'外观：' + themeLabel" @click="nextTheme">
+          <svg v-if="theme === 'auto'" viewBox="0 0 24 24" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="12" rx="2" />
+            <path d="M8 20h8" />
+          </svg>
+          <svg v-else-if="theme === 'light'" viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6L17 7M7 17l-1.4 1.4" />
+          </svg>
+          <svg v-else viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z" />
+          </svg>
+        </button>
+        <button class="icon-btn" type="button" @click="showSettings = !showSettings" aria-label="设置" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
+          </svg>
+        </button>
+      </div>
+      <span class="note inline">{{ state === "waiting" ? "关掉窗口门还开着" : "" }}</span>
       <span class="mono version">v0.1</span>
     </footer>
   </div>
@@ -507,7 +547,7 @@ const retry = () => {
   margin-left: -4px;
 }
 .win-btn {
-  width: 26px;
+  width: 32px;
   height: 26px;
   display: grid;
   place-items: center;
@@ -519,8 +559,8 @@ const retry = () => {
   transition: background 0.12s ease, color 0.12s ease;
 }
 .win-btn svg {
-  width: 12px;
-  height: 12px;
+  width: 13px;
+  height: 13px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.3;
@@ -810,6 +850,86 @@ const retry = () => {
   gap: 6px;
 }
 
+/* —— 首页的两个选择 —— */
+.choice {
+  width: 100%;
+}
+.choice-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 16px;
+}
+.choice-card {
+  display: flex;
+  flex-direction: column;
+  padding: 13px 14px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  /* 苹果那套：快出慢落，按下略缩 */
+  transition: transform 0.22s cubic-bezier(0.32, 0.72, 0, 1), border-color 0.2s ease,
+    background 0.2s ease, box-shadow 0.24s ease;
+}
+.choice-card:hover {
+  border-color: var(--line-strong);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px -12px rgba(0, 0, 0, 0.5);
+}
+.choice-card:active {
+  transform: scale(0.98);
+}
+.choice-card.on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+.choice-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.choice-sub {
+  margin-top: 4px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+/* 展开区：用 grid-template-rows 0fr→1fr 做高度动画，不写死 max-height */
+.expander {
+  width: 100%;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows 0.42s cubic-bezier(0.32, 0.72, 0, 1), opacity 0.3s ease;
+}
+.expander.open {
+  grid-template-rows: 1fr;
+  opacity: 1;
+}
+.expander-inner {
+  overflow: hidden;
+}
+.panel-inline {
+  width: 100%;
+  max-width: 320px;
+  margin: 16px auto 2px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+}
+.panel-inline .field {
+  max-width: none;
+}
+
+.foot-left {
+  display: flex;
+  gap: 6px;
+}
+
 /* —— 门开着多久 / 关门 —— */
 .open-meta {
   display: flex;
@@ -1037,8 +1157,8 @@ const retry = () => {
 }
 /* 缓动取参考站的招牌曲线：出得快、落得稳 */
 .view-enter-active {
-  transition: opacity 0.22s cubic-bezier(0.22, 0.68, 0, 1),
-    transform 0.26s cubic-bezier(0.22, 0.68, 0, 1), filter 0.26s cubic-bezier(0.22, 0.68, 0, 1);
+  transition: opacity 0.24s cubic-bezier(0.32, 0.72, 0, 1),
+    transform 0.34s cubic-bezier(0.32, 0.72, 0, 1), filter 0.3s cubic-bezier(0.32, 0.72, 0, 1);
 }
 .view-leave-active {
   transition: opacity 0.15s cubic-bezier(0.4, 0, 0.6, 1), transform 0.15s cubic-bezier(0.4, 0, 0.6, 1),
@@ -1141,6 +1261,7 @@ const retry = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   color: var(--muted);
   font-size: 11.5px;
   padding: 0 2px;

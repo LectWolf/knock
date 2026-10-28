@@ -181,14 +181,23 @@ fn win_minimize(app: AppHandle) {
     }
 }
 
+/// 窗口现在在哪。自己拖着走的时候要用它当起点。
 #[tauri::command]
-fn win_toggle_max(app: AppHandle) {
+fn win_pos(app: AppHandle) -> (i32, i32) {
+    app.get_webview_window("main")
+        .and_then(|w| w.outer_position().ok())
+        .map(|p| (p.x, p.y))
+        .unwrap_or((0, 0))
+}
+
+/// 把窗口挪到 (x, y)。
+///
+/// 不用 `start_dragging()`：无边框窗口上它要靠系统的拖动循环，
+/// 抬手快一点就丢帧，用户会感觉"拖不动"。自己算位移更听话。
+#[tauri::command]
+fn win_set_pos(app: AppHandle, x: i32, y: i32) {
     if let Some(w) = app.get_webview_window("main") {
-        if w.is_maximized().unwrap_or(false) {
-            let _ = w.unmaximize();
-        } else {
-            let _ = w.maximize();
-        }
+        let _ = w.set_position(tauri::PhysicalPosition::new(x, y));
     }
 }
 
@@ -226,7 +235,8 @@ fn main() {
             guests,
             kick,
             win_minimize,
-            win_toggle_max,
+            win_pos,
+            win_set_pos,
             win_hide
         ])
         .setup(|app| {
