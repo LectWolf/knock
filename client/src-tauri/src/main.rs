@@ -172,6 +172,34 @@ fn kick(st: State<'_, App>, id: String) -> Result<(), String> {
     Ok(())
 }
 
+// —— 自绘标题栏要用的三个动作。放在 Rust 里，界面不碰 window 权限 ——
+
+#[tauri::command]
+fn win_minimize(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.minimize();
+    }
+}
+
+#[tauri::command]
+fn win_toggle_max(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        if w.is_maximized().unwrap_or(false) {
+            let _ = w.unmaximize();
+        } else {
+            let _ = w.maximize();
+        }
+    }
+}
+
+/// 关闭按钮 = 缩到托盘（门继续开着），和点窗口右上角一致
+#[tauri::command]
+fn win_hide(app: AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.hide();
+    }
+}
+
 /// 把主窗口叫出来：显示 + 取消最小化 + 聚焦。
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -196,7 +224,10 @@ fn main() {
             close_door,
             door_state,
             guests,
-            kick
+            kick,
+            win_minimize,
+            win_toggle_max,
+            win_hide
         ])
         .setup(|app| {
             let handle = app.handle().clone();

@@ -33,6 +33,10 @@ const pick = <T extends string>(key: string, allowed: readonly T[], fallback: T)
   return v && (allowed as readonly string[]).includes(v) ? (v as T) : fallback;
 };
 
+const winMin = () => void invoke?.("win_minimize");
+const winMax = () => void invoke?.("win_toggle_max");
+const winHide = () => void invoke?.("win_hide");
+
 const state = ref<ConnState>(
   pick("state", ["idle", "creating", "waiting", "punching", "direct", "relay", "failed"], "idle"),
 );
@@ -247,7 +251,7 @@ const retry = () => {
 
 <template>
   <div class="shell">
-    <header class="bar">
+    <header class="bar" data-tauri-drag-region>
       <div class="mark">
         <span class="dot" aria-hidden="true"></span>
         <span class="word">Knock</span>
@@ -273,6 +277,18 @@ const retry = () => {
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.6 1.6 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.6 1.6 0 0 0-1.8-.3 1.6 1.6 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.6 1.6 0 0 0-1-1.5 1.6 1.6 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.6 1.6 0 0 0 .3-1.8 1.6 1.6 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.6 1.6 0 0 0 1.5-1 1.6 1.6 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.6 1.6 0 0 0 1.8.3H9a1.6 1.6 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.6 1.6 0 0 0 1 1.5 1.6 1.6 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.6 1.6 0 0 0-.3 1.8V9a1.6 1.6 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.6 1.6 0 0 0-1.5 1z" />
           </svg>
+        </button>
+      </div>
+
+      <div class="win-btns">
+        <button class="win-btn" type="button" aria-label="最小化" title="最小化" @click="winMin">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 6h6" /></svg>
+        </button>
+        <button class="win-btn" type="button" aria-label="最大化" title="最大化" @click="winMax">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><rect x="3" y="3" width="6" height="6" rx="1" /></svg>
+        </button>
+        <button class="win-btn close" type="button" aria-label="收进托盘" title="收进托盘" @click="winHide">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5" /></svg>
         </button>
       </div>
     </header>
@@ -477,6 +493,46 @@ const retry = () => {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  /* 自绘标题栏：这一整条都能拖动窗口 */
+  gap: 10px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.bar .mark {
+  pointer-events: none; /* 拖动优先，别让文字吃掉手势 */
+}
+.win-btns {
+  display: flex;
+  gap: 2px;
+  margin-left: -4px;
+}
+.win-btn {
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.win-btn svg {
+  width: 12px;
+  height: 12px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.3;
+  stroke-linecap: round;
+}
+.win-btn:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.win-btn.close:hover {
+  color: #fff;
+  background: #c0392b;
 }
 .mark {
   display: flex;
