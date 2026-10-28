@@ -47,6 +47,8 @@ pub enum Event {
     PeerKnocked,
     /// 节点上查不到这个门牌号（码错或已过期）
     CodeRejected,
+    /// 节点的协议版本和客户端对不上——这事没救，只能让节点主人更新
+    NodeVersionMismatch,
 
     // —— 打洞 ——
     PunchSucceeded,
@@ -151,6 +153,11 @@ impl Machine {
         }
     }
 
+    /// 现在是房主还是房客。关门时要靠它决定"要不要通知节点把房间收了"。
+    pub fn role(&self) -> Role {
+        self.role
+    }
+
     pub fn state(&self) -> ConnState {
         self.state
     }
@@ -199,6 +206,10 @@ impl Machine {
             E::RoomRegisterFailed if from == Creating => dead(FailReason::RelayUnavailable),
             E::PeerKnocked if from == Waiting => plain(Punching),
             E::CodeRejected if from == Punching => dead(FailReason::CodeNotFound),
+            // 版本对不上在开门和敲门两条路上都可能发生，两个"进行中"状态都要收
+            E::NodeVersionMismatch if from == Punching || from == Creating => {
+                dead(FailReason::NodeOutdated)
+            }
 
             // —— 打洞 ——
             E::PunchSucceeded if from == Punching => plain(Direct),

@@ -351,3 +351,18 @@ fn illegal_event_is_rejected() {
     let mut fresh = FakeTransport::new(vec![]);
     assert_eq!(fresh.feed(PeerLeft), Err(TransportError::NotConnected));
 }
+
+/// 节点版本对不上：这是**没有退路**的失败，两条入口都得直接落到 Failed。
+///
+/// 这里要单独测，因为它既不是打洞失败也不是查码失败——归到 relay_unavailable
+/// 会骗人去重试，而重试一百次也不会好。
+#[test]
+fn a_version_mismatch_kills_either_path() {
+    let guest = guest_scene(vec![NodeVersionMismatch]);
+    assert_eq!(guest.state(), Failed);
+    assert_eq!(guest.fail(), Some(NodeOutdated));
+
+    let host = host_scene(vec![NodeVersionMismatch]);
+    assert_eq!(host.state(), Failed);
+    assert_eq!(host.fail(), Some(NodeOutdated));
+}

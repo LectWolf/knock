@@ -30,6 +30,15 @@
 6b. ~~公网节点要重新部署~~ **已部署**（2026-10-29）：新二进制上机、名字设为「香港·荃湾」，
    healthz 已报 `proto:{api:1,transport:2}`。对这台真节点 + 真中继跑完了全部四项端到端，全绿。
 
+## 已补（2026-10-29）
+
+- **`node_outdated` 有了名字**：之前版本对不上会伪装成 `relay_unavailable`，让人以为重试有用。
+  现在它是第 6 个原因码，界面文案是「服务器版本太旧」。
+- **退出应用会把房间摘掉**：房主 `close()` 时向节点发一次 `close`，不再留空房到 TTL。
+- **复制门牌号有兜底**：WebView 里 `navigator.clipboard` 被拒时退回隐藏 textarea + execCommand。
+- **节点列表从 GitHub 拉**：`api.github.com` 的 raw media type 优先（`raw.githubusercontent`
+  在国内多半连不上），本地缓存 7 天，拉不到就用缓存，缓存也没有就提示手填。
+
 ## 协议与节点
 
 6. **心跳没实现**：节点侧已按"最后一次 announce 续命"，但客户端还没有每 60 秒重发 announce 的循环。

@@ -63,15 +63,18 @@ pub enum FailReason {
     SymmetricNat,
     /// 绕路也走不通
     RelayUnavailable,
+    /// 节点的协议版本和客户端对不上（客户端比节点新，或反过来）
+    NodeOutdated,
 }
 
 impl FailReason {
-    pub const ALL: [FailReason; 5] = [
+    pub const ALL: [FailReason; 6] = [
         FailReason::CodeNotFound,
         FailReason::HostOffline,
         FailReason::BlockedByFirewall,
         FailReason::SymmetricNat,
         FailReason::RelayUnavailable,
+        FailReason::NodeOutdated,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -81,6 +84,7 @@ impl FailReason {
             FailReason::BlockedByFirewall => "blocked_by_firewall",
             FailReason::SymmetricNat => "symmetric_nat",
             FailReason::RelayUnavailable => "relay_unavailable",
+            FailReason::NodeOutdated => "node_outdated",
         }
     }
 }

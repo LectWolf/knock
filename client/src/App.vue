@@ -23,7 +23,8 @@ type FailReason =
   | "host_offline"
   | "blocked_by_firewall"
   | "symmetric_nat"
-  | "relay_unavailable";
+  | "relay_unavailable"
+  | "node_outdated";
 
 type Theme = "auto" | "light" | "dark";
 
@@ -66,7 +67,14 @@ const state = ref<ConnState>(
 const fail = ref<FailReason>(
   pick(
     "fail",
-    ["code_not_found", "host_offline", "blocked_by_firewall", "symmetric_nat", "relay_unavailable"],
+    [
+      "code_not_found",
+      "host_offline",
+      "blocked_by_firewall",
+      "symmetric_nat",
+      "relay_unavailable",
+      "node_outdated",
+    ],
     "host_offline",
   ),
 );
@@ -164,6 +172,42 @@ onMounted(async () => {
 });
 
 const showSettings = ref(params.get("panel") === "settings");
+
+/* 节点列表：不内置，从仓库里拉一次并缓存 */
+const nodeList = ref<any[]>([]);
+const nodesBusy = ref(false);
+const nodesError = ref("");
+
+const loadNodes = async () => {
+  if (!invoke) return;
+  const l = await invoke("nodes_cached").catch(() => null);
+  if (l?.nodes?.length) nodeList.value = l.nodes;
+};
+
+const refreshNodes = async () => {
+  if (!invoke) return;
+  nodesBusy.value = true;
+  nodesError.value = "";
+  try {
+    const l = await invoke("nodes_refresh");
+    nodeList.value = l.nodes ?? [];
+    if (!nodeList.value.length) nodesError.value = "列表是空的";
+  } catch (e: any) {
+    nodesError.value = typeof e === "string" ? e : "拉不到列表，检查网络";
+  } finally {
+    nodesBusy.value = false;
+  }
+};
+
+const pickNode = async (n: any) => {
+  if (!n.url) return;
+  nodeAddr.value = n.url;
+  await persist();
+};
+
+watch(showSettings, (open) => {
+  if (open && !nodeList.value.length) void loadNodes();
+});
 const nodeAddr = ref(params.get("node") ?? "");
 const viewKey = computed(() =>
   firstRun.value ? "first" : showSettings.value ? "settings" : state.value + (state.value === "failed" ? ":" + fail.value : ""),
@@ -231,6 +275,10 @@ const failCopy: Record<FailReason, { title: string; hint: string }> = {
   host_offline: { title: "门开着，但屋里没人", hint: "他还没把服务开起来，让他先开服再敲一次。" },
   blocked_by_firewall: { title: "门被挡住了", hint: "本机的防护软件挡住了出门的路，放行一次就好。" },
   symmetric_nat: { title: "两边都出不去", hint: "这条路走不通，需要在设置里允许绕路。" },
+  node_outdated: {
+    title: "服务器版本太旧",
+    hint: "这个节点还是老版本，连不上。让节点主人更新一下，或者换一个节点。",
+  },
   relay_unavailable: { title: "绕路也走不通", hint: "过一会儿再试，或者换一个门牌号。" },
 };
 
@@ -269,9 +317,26 @@ const closeDoor = async () => {
 
 const copied = ref(false);
 let timer: number | undefined;
+const legacyCopy = (text: string) => {
+  const el = document.createElement("textarea");
+  el.value = text;
+  el.style.position = "fixed";
+  el.style.opacity = "0";
+  document.body.appendChild(el);
+  el.select();
+  const ok = document.execCommand("copy");
+  document.body.removeChild(el);
+  return ok;
+};
+
 const copyCode = async () => {
   try {
-    await navigator.clipboard.writeText(code.value);
+    try {
+      await navigator.clipboard.writeText(code.value);
+    } catch {
+      // 有些 WebView 里 clipboard 被安全策略挡了，退回老办法
+      if (!legacyCopy(code.value)) throw new Error("copy failed");
+    }
   } catch {
     /* 剪贴板不可用时也别打断用户 */
   }
@@ -398,6 +463,30 @@ const retry = () => {
               @change="persist"
             />
           </label>
+          <div class="nodes">
+            <div class="nodes-head">
+              <span class="setting-label">可选节点</span>
+              <button class="ghost tiny" type="button" :disabled="nodesBusy" @click="refreshNodes">
+                {{ nodesBusy ? "刷新中…" : "刷新列表" }}
+              </button>
+            </div>
+            <p v-if="nodesError" class="warn">{{ nodesError }}</p>
+            <button
+              v-for="n in nodeList"
+              :key="n.code"
+              class="node-row"
+              type="button"
+              :class="{ on: nodeAddr === n.url }"
+              @click="pickNode(n)"
+            >
+              <span class="node-name">{{ n.name || n.label }}</span>
+              <span class="node-sub">{{ n.relay ? "能绕路" : "只做信令" }}<template v-if="n.note"> · {{ n.note }}</template></span>
+            </button>
+            <p v-if="!nodeList.length && !nodesBusy" class="note">
+              列表还没拉过。填上面那行地址也能用——列表只是省事。
+            </p>
+          </div>
+
           <label class="row-setting">
             <span class="setting-label">外观</span>
             <button class="ghost tiny" type="button" @click="nextTheme">{{ themeLabel }}</button>
@@ -1011,6 +1100,46 @@ textarea {
 }
 .panel-inline .field {
   max-width: none;
+}
+
+.nodes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 4px;
+}
+.nodes-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.node-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 12px;
+  text-align: left;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+.node-row:hover {
+  border-color: var(--line-strong);
+}
+.node-row.on {
+  border-color: var(--accent-line);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.node-name {
+  font-size: 13px;
+  color: var(--text);
+}
+.node-sub {
+  font-size: 11.5px;
+  color: var(--muted);
 }
 
 .warn {

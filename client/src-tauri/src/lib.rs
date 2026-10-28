@@ -17,6 +17,7 @@ pub mod machine;
 pub mod pipe;
 pub mod policy;
 pub mod resolve;
+pub mod nodes;
 pub mod room;
 pub mod sessions;
 pub mod settings;

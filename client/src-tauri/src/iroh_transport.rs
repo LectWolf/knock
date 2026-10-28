@@ -166,6 +166,20 @@ impl Transport for IrohTransport {
 
     fn close(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+
+        // 房主关门：告诉节点一声，别让房间在那边挂到自然过期。
+        // 房客不能发这个——他关掉的只是自己那条通路，门是别人的。
+        let is_host = matches!(self.machine.lock().unwrap().role(), Role::Host);
+        if is_host {
+            if let Some(code) = self.code.lock().unwrap().clone() {
+                let client = Arc::clone(&self.client);
+                // close() 是同步接口，别把 HTTP 往返塞进界面线程
+                std::thread::spawn(move || {
+                    let _ = client.close(&code);
+                });
+            }
+        }
+
         let _ = emit(&self.machine, &self.sink, Event::CloseRequested);
     }
 
@@ -210,6 +224,7 @@ impl Ctx {
             FailReason::BlockedByFirewall => Event::PunchBlocked,
             FailReason::SymmetricNat => Event::PunchSymmetricNat,
             FailReason::RelayUnavailable => Event::PunchTimedOut,
+            FailReason::NodeOutdated => Event::NodeVersionMismatch,
         };
         let _ = self.emit(event);
     }
@@ -447,7 +462,7 @@ fn fail_of(e: RoomError) -> FailReason {
         RoomError::Network(_) => FailReason::HostOffline,
         RoomError::PinMismatch => FailReason::RelayUnavailable,
         // 版本对不上不是网络问题：让用户去更新，别让他反复重试
-        RoomError::NodeOutdated { .. } => FailReason::RelayUnavailable,
+        RoomError::NodeOutdated { .. } => FailReason::NodeOutdated,
         RoomError::NodeFull => FailReason::RelayUnavailable,
         RoomError::RateLimited { .. } => FailReason::RelayUnavailable,
         RoomError::BadToken => FailReason::RelayUnavailable,

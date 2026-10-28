@@ -50,6 +50,7 @@ fn fail_name(f: FailReason) -> &'static str {
         FailReason::BlockedByFirewall => "blocked_by_firewall",
         FailReason::SymmetricNat => "symmetric_nat",
         FailReason::RelayUnavailable => "relay_unavailable",
+        FailReason::NodeOutdated => "node_outdated",
     }
 }
 
@@ -128,6 +129,22 @@ fn close_door(st: State<'_, App>) {
         t.close();
     }
     *st.transport.lock().unwrap() = None;
+}
+
+/// 列表：先给缓存（哪怕过期了，也比空着强），界面自己决定要不要刷新。
+#[tauri::command]
+fn nodes_cached(app: AppHandle) -> Option<knock::nodes::List> {
+    knock::nodes::cached(&config_dir(&app))
+}
+
+/// 去 GitHub 重新拉一份。拉不到就把人话原样带回界面。
+#[tauri::command]
+fn nodes_refresh(app: AppHandle) -> Result<knock::nodes::List, String> {
+    let list = knock::nodes::fetch_any()?;
+    let dir = config_dir(&app);
+    // 存不下不算失败：这次已经能用上了
+    let _ = knock::nodes::save(&dir, &list);
+    Ok(list)
 }
 
 /// 现在这扇门的门牌号。没开门时是空。
@@ -219,6 +236,17 @@ fn win_hide(app: AppHandle) {
     }
 }
 
+/// 退出前收摊：让 transport 把房间从节点上摘掉，别留下挂到过期为止的空房。
+fn shutdown(app: &AppHandle) {
+    if let Some(state) = app.try_state::<App>() {
+        if let Some(t) = state.transport.lock().unwrap().as_mut() {
+            t.close();
+        }
+    }
+    // 给 close 请求一点点时间落地；进程立刻退会把连接掐了
+    std::thread::sleep(std::time::Duration::from_millis(250));
+}
+
 /// 把主窗口叫出来：显示 + 取消最小化 + 聚焦。
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
@@ -243,6 +271,8 @@ fn main() {
             close_door,
             door_state,
             door_code,
+            nodes_cached,
+            nodes_refresh,
             guests,
             kick,
             win_minimize,
@@ -270,7 +300,10 @@ fn main() {
                         let _ = app.emit("knock://tray", "close_door");
                         show_main(app);
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        shutdown(app);
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
