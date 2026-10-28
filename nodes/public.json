@@ -1,0 +1,14 @@
+{
+  "version": 1,
+  "updated": "2026-10-28",
+  "nodes": [
+    {
+      "code": "377PN6H4MPH0WYEFD838Q42C674TR",
+      "label": "0TPF",
+      "name": "香港·荃湾",
+      "operator": "project",
+      "relay": true,
+      "note": "项目自用测试节点，随时可能下线"
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+# Rust
+target/
+client/src-tauri/target/
+
+# Node / 前端构建
+node_modules/
+client/node_modules/
+client/dist/
+
+# 截图是本地产物，不进仓库
+shots/
+
+# 本地环境与密钥
+*.log
+.env
+.DS_Store
+Thumbs.db

@@ -1,0 +1,105 @@
+/* 设计令牌：亮/暗两套，默认跟随系统，也支持手动覆盖。
+   两套令牌必须**成组出现**——只覆盖一半变量会导致"卡片亮、背景暗"这种脏画面。
+     :root                                          亮色（默认）
+     :root[data-theme="dark"]                       手动暗色
+     @media (dark) :root:not([data-theme="light"])   跟随系统
+*/
+:root {
+  color-scheme: light;
+  --bg: #f4f5f7;
+  --bg-glow: linear-gradient(180deg, #fbfbfd 0%, #f1f2f5 100%);
+  --surface: #ffffff;
+  --surface-2: #fafafb;
+  --text: #14171c;
+  --text-soft: #4b5563;
+  --muted: #78808c;
+  --line: rgba(20, 23, 28, 0.09);
+  --line-strong: rgba(20, 23, 28, 0.14);
+  --accent: #9f5f12;
+  --accent-soft: rgba(159, 95, 18, 0.1);
+  --accent-line: rgba(159, 95, 18, 0.3);
+  --on-accent: #ffffff;
+  --ok: #17714a;
+  --ok-soft: rgba(23, 113, 74, 0.1);
+  --warn: #8a5a12;
+  --warn-soft: rgba(138, 90, 18, 0.12);
+  --err: #ad2b23;
+  --err-soft: rgba(173, 43, 35, 0.1);
+  --r-lg: 20px;
+  --r-md: 13px;
+  --r-sm: 9px;
+  --shadow-card: 0 1px 1px rgba(20, 23, 28, 0.04), 0 12px 32px -18px rgba(20, 23, 28, 0.35);
+  --shadow-primary: 0 1px 1px rgba(120, 72, 12, 0.25), 0 8px 18px -10px rgba(159, 95, 18, 0.55);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d0f12;
+  --bg-glow: linear-gradient(180deg, #12151a 0%, #0b0d10 100%);
+  --surface: #16191e;
+  --surface-2: #1b1f25;
+  --text: #eceef1;
+  --text-soft: #b3bac4;
+  --muted: #7f8793;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.14);
+  --accent: #d9a05b;
+  --accent-soft: rgba(217, 160, 91, 0.12);
+  --accent-line: rgba(217, 160, 91, 0.3);
+  --on-accent: #201607;
+  --ok: #5fbf92;
+  --ok-soft: rgba(95, 191, 146, 0.12);
+  --warn: #e0b067;
+  --warn-soft: rgba(224, 176, 103, 0.12);
+  --err: #e88d84;
+  --err-soft: rgba(232, 141, 132, 0.12);
+  --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.4), 0 16px 40px -24px rgba(0, 0, 0, 0.9);
+  --shadow-primary: 0 1px 1px rgba(0, 0, 0, 0.3), 0 8px 20px -12px rgba(217, 160, 91, 0.45);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #0d0f12;
+    --bg-glow: linear-gradient(180deg, #12151a 0%, #0b0d10 100%);
+    --surface: #16191e;
+    --surface-2: #1b1f25;
+    --text: #eceef1;
+    --text-soft: #b3bac4;
+    --muted: #7f8793;
+    --line: rgba(255, 255, 255, 0.08);
+    --line-strong: rgba(255, 255, 255, 0.14);
+    --accent: #d9a05b;
+    --accent-soft: rgba(217, 160, 91, 0.12);
+    --accent-line: rgba(217, 160, 91, 0.3);
+    --on-accent: #201607;
+    --ok: #5fbf92;
+    --ok-soft: rgba(95, 191, 146, 0.12);
+    --warn: #e0b067;
+    --warn-soft: rgba(224, 176, 103, 0.12);
+    --err: #e88d84;
+    --err-soft: rgba(232, 141, 132, 0.12);
+    --shadow-card: 0 1px 1px rgba(0, 0, 0, 0.4), 0 16px 40px -24px rgba(0, 0, 0, 0.9);
+    --shadow-primary: 0 1px 1px rgba(0, 0, 0, 0.3), 0 8px 20px -12px rgba(217, 160, 91, 0.45);
+  }
+}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; }
+
+body {
+  margin: 0;
+  background-color: var(--bg);
+  background-image: var(--bg-glow);
+  color: var(--text);
+  font-family: "Inter", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei",
+    system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.mono {
+  font-family: "JetBrains Mono", "Cascadia Mono", "SF Mono", ui-monospace, Consolas, monospace;
+  font-variant-numeric: tabular-nums;
+}
