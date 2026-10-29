@@ -6,159 +6,251 @@
 <style>
   :root{--bg:#0b0d11;--panel:#101419;--line:#1f2732;--text:#d7dce4;--muted:#8b95a4;--accent:#d9a05b;--ok:#7fb87f;--warn:#cf8a5c;--dim:#5a6473}
   *{box-sizing:border-box}
-  body{margin:0;min-height:100vh;background:radial-gradient(1100px 560px at 18% -8%,#171d25 0%,var(--bg) 62%);color:var(--text);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;flex-direction:column;align-items:center;padding:30px 18px 50px}
+  body{margin:0;min-height:100vh;background:radial-gradient(1100px 560px at 18% -8%,#171d25 0%,var(--bg) 62%);color:var(--text);font-family:-apple-system,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif;display:flex;flex-direction:column;align-items:center;padding:28px 18px 46px}
   h1{font-size:19px;font-weight:600;margin:0 0 6px}
-  .sub{color:var(--muted);font-size:12.5px;margin-bottom:18px;text-align:center;line-height:1.7}
-  .win{width:min(880px,100%);background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:0 26px 70px rgba(0,0,0,.55)}
+  .sub{color:var(--muted);font-size:12.5px;margin-bottom:16px;text-align:center;line-height:1.7}
+  .win{width:min(860px,100%);background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:0 26px 70px rgba(0,0,0,.55)}
   .bar{display:flex;align-items:center;gap:8px;padding:10px 14px;border-bottom:1px solid var(--line);background:#0d1116}
   .dot{width:11px;height:11px;border-radius:50%}.d1{background:#d9a05b}.d2{background:#cf6a5c}
   .bar .title{margin-left:8px;font-size:12px;color:var(--muted)}
-  .term{font-family:"JetBrains Mono","Cascadia Mono",Consolas,monospace;font-size:13px;line-height:1.72;padding:16px 18px;height:520px;overflow-y:auto}
-  .term::-webkit-scrollbar{width:9px}.term::-webkit-scrollbar-thumb{background:#222b36;border-radius:9px}
-  .line{white-space:pre-wrap;word-break:break-word}
-  .ok{color:var(--ok)}.warn{color:var(--warn)}.acc{color:var(--accent)}.muted{color:var(--muted)}.dim{color:var(--dim)}
-  .cmd{color:#eaf0f7}.cmd::before{content:"$ ";color:var(--dim)}
-  .box{border:1px solid var(--line);border-radius:9px;padding:10px 13px;margin:8px 0;background:#0d1116}
-  .code{color:var(--accent);font-size:15px;letter-spacing:1.4px}
-  .inputrow{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);background:#0d1116;padding:10px 16px}
+  .term{font-family:"JetBrains Mono","Cascadia Mono",Consolas,monospace;font-size:13px;line-height:1.75;padding:18px 20px;height:430px;overflow-y:auto;white-space:pre-wrap}
+  .muted{color:var(--muted)}.dim{color:var(--dim)}.ok{color:var(--ok)}.warn{color:var(--warn)}.acc{color:var(--accent)}.hi{color:var(--text)}
+  .inputrow{display:flex;align-items:center;gap:8px;border-top:1px solid var(--line);background:#0d1116;padding:11px 16px}
   .prompt{color:var(--accent);font-family:Consolas,monospace;font-size:13px;white-space:nowrap}
   .input{flex:1;background:transparent;border:0;outline:none;color:var(--text);font-family:Consolas,monospace;font-size:13px;caret-color:var(--accent)}
   .foot{display:flex;gap:8px;align-items:center;padding:10px 14px;border-top:1px solid var(--line);background:#0d1116;flex-wrap:wrap}
   button{font:inherit;font-size:12px;color:var(--text);background:#182029;border:1px solid var(--line);border-radius:7px;padding:6px 12px;cursor:pointer}
   button:hover{border-color:#34404f}
-  .chips{display:flex;flex-wrap:wrap;gap:6px;margin-left:auto}
-  .chip{font-family:Consolas,monospace;font-size:11.5px;color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:3px 9px;cursor:pointer}
-  .chip:hover{color:var(--accent);border-color:rgba(217,160,91,.4)}
-  .note{width:min(880px,100%);margin-top:14px;font-size:12px;color:var(--dim);line-height:1.8}
+  .note{width:min(860px,100%);margin-top:14px;font-size:12px;color:var(--dim);line-height:1.8}
 </style>
 </head>
 <body>
   <h1>Knock 节点 · 自己敲的演示</h1>
-  <div class="sub">这是一个假终端：命令和输出照真脚本写。<b>knock</b> 开菜单，然后按 1–9，状态会真的变。</div>
+  <div class="sub">整屏刷新的界面：按数字进功能，按 <b>q</b> 回菜单。安装过程有真实停顿。</div>
 
   <div class="win">
     <div class="bar"><span class="dot d1"></span><span class="dot d2"></span><span class="title">root@node — knock</span></div>
     <div class="term" id="term"></div>
     <div class="inputrow">
-      <span class="prompt" id="prompt">root@node:~#</span>
-      <input class="input" id="input" autocomplete="off" autofocus spellcheck="false" placeholder="输入命令，回车执行">
+      <span class="prompt" id="prompt">选一个：</span>
+      <input class="input" id="input" autocomplete="off" autofocus spellcheck="false" placeholder="键盘直接按，或在这里输入">
     </div>
     <div class="foot">
       <button id="install">跑一遍安装</button>
-      <button id="clear">清屏</button>
-      <div class="chips">
-        <span class="chip" data-cmd="knock">knock</span>
-        <span class="chip" data-cmd="knock status">knock status</span>
-        <span class="chip" data-cmd="knock code">knock code</span>
-        <span class="chip" data-cmd="knock port 30995">knock port 30995</span>
-        <span class="chip" data-cmd="knock cert">knock cert</span>
-        <span class="chip" data-cmd="knock relay off">knock relay off</span>
-      </div>
+      <button id="reset">回主菜单</button>
+      <span class="muted" style="margin-left:auto;font-size:11.5px">1–9 进功能 · q 返回 · 0 退出</span>
     </div>
   </div>
 
-  <div class="note">模拟器，不碰你的机器。真机上：<code>sudo ./install.sh</code> 装、<code>knock</code> 管。改端口、关中继会真的反映到后面的输出里；刷新复位。</div>
+  <div class="note">模拟器，不碰你的机器。真机上就是 <code>knock</code> 这一条命令。</div>
 
 <script>
-const term=document.getElementById('term'),input=document.getElementById('input'),promptEl=document.getElementById('prompt');
-const node={name:'香港·荃湾',ipv4:'154.36.165.162',port:30990,relayPort:30991,relay:true,relayTls:true,rooms:1,code:'377PN6H4MPH0WYEFD838Q42C674TR',label:'0TPF',certPath:'/etc/ssl/knock/fullchain.pem',certDays:19,certMode:'Reloading'};
-const el=(cls,text='')=>{const d=document.createElement('div');d.className='line '+cls;d.textContent=text;term.appendChild(d);term.scrollTop=term.scrollHeight;return d};
-const say=(t,c='')=>el(c,t), blank=()=>el('');
-const boxLine=(text)=>{const d=document.createElement('div');d.className='box';const c=document.createElement('div');c.className='code';c.textContent=text;d.appendChild(c);term.appendChild(d);term.scrollTop=term.scrollHeight};
-let awaitingMenu=false;const PROMPT='root@node:~#';
+var term=document.getElementById('term'),input=document.getElementById('input'),promptEl=document.getElementById('prompt');
+var S={name:'香港·荃湾',port:30990,relayPort:30991,relay:true,relayTls:true,rooms:1,code:'377PN6H4MPH0WYEFD838Q42C674TR',label:'0TPF',certPath:'/etc/ssl/knock/fullchain.pem',certDays:19};
+var screen='menu',busy=false,pendingPort=null;
 
-function showStatus(){
-  const relayLine=!node.relay?'未开启（只做信令）':node.relayTls?'开 · TLS · 单独 '+node.relayPort+' 端口（能帮打洞）':'开 · 单独 '+node.relayPort+' 端口（明文，不帮打洞）';
-  say('  服务    active');
-  say('  节点    '+node.name);
-  say('  门      '+node.rooms+' 扇开着');
-  say('  端口    房间 '+node.port+(node.relay?' · 中继 '+node.relayPort:''));
-  say('  中继    '+relayLine);
+function line(txt,cls){var d=document.createElement('div');d.className=cls||'hi';d.textContent=txt;term.appendChild(d);term.scrollTop=term.scrollHeight;return d}
+function hr(){line(new Array(53).join('─'),'dim')}
+function clearTerm(){term.innerHTML=''}
+
+function header(){
+  line('  Knock 节点管理','acc'); hr();
+  line('  节点     '+S.name);
+  line('  服务     active','ok');
+  line('  端口     房间 '+S.port+(S.relay?' · 中继 '+S.relayPort:''));
+  line('  中继     '+(S.relay?(S.relayTls?'开 · TLS（能帮打洞）':'开 · 明文（不帮打洞）'):'关（只做信令）'));
+  hr();
 }
-function showMenu(){
-  blank();say('Knock 节点管理','acc');blank();
-  ['1) 状态','2) 节点码','3) 日志','4) 重启','5) 开关中继','6) 改端口','7) 证书','8) 升级','9) 卸载','0) 退出'].forEach(function(l){say('  '+l)});
-  blank();awaitingMenu=true;promptEl.textContent='选一个：';
+
+var views={
+  menu:function(){
+    header();
+    line('   1) 状态        2) 节点码      3) 日志');
+    line('   4) 重启        5) 开关中继    6) 改端口');
+    line('   7) 证书        8) 升级        9) 卸载');
+    line('   0) 退出');
+    hr();
+    promptEl.textContent='选一个：';
+  },
+  status:function(){
+    line('状态','muted'); hr();
+    line('  服务    active');
+    line('  节点    '+S.name);
+    line('  门      '+S.rooms+' 扇开着');
+    line('  端口    房间 '+S.port+(S.relay?' · 中继 '+S.relayPort:''));
+    line('  中继    '+(S.relay?(S.relayTls?'开 · TLS · 单独 '+S.relayPort+' 端口（能帮打洞）':'开 · 单独 '+S.relayPort+' 端口（明文，不帮打洞）'):'未开启（只做信令）'));
+    hr(); line('按 q 返回菜单','dim');
+  },
+  code:function(){
+    line('节点码','muted'); hr(); line(''); line('  '+S.code,'acc'); line('');
+    line('  '+S.label+' · 端口 '+S.port,'muted'); hr(); line('按 q 返回菜单','dim');
+  },
+  logs:function(){
+    line('日志（最近几条）','muted'); hr();
+    line('  10月29 14:02:11 门开着：房间 R7K2M9（端口 25565）');
+    line('  10月29 14:03:02 房客进来了：冷枫小乐（直连）');
+    line('  10月29 14:09:40 房客走了：冷枫小乐');
+    hr(); line('按 q 返回菜单','dim');
+  },
+  restart:function(){
+    line('重启','muted'); hr();
+    line('  确定重启节点服务？已经连着的房客会断。');
+    line('  [y/N]'); line('按 q 返回菜单','dim');
+  },
+  relay:function(){
+    line('开关中继','muted'); hr();
+    line('  现在：'+(S.relay?'开（https://knock.mcii.cc:'+S.relayPort+'）':'关（只做信令）'));
+    line('');
+    line('  '+(S.relay?'要关掉中继吗？关掉后直连打不通的人就进不来了。':'要打开中继吗？需要这台机装了 iroh-relay。'));
+    line('  [y/N]'); line('按 q 返回菜单','dim');
+  },
+  port:function(){
+    line('改端口','muted'); hr();
+    line('  现在：房间服务监听 '+S.port); line('');
+    line('  新端口（直接回车取消）：'); line('按 q 返回菜单','dim');
+  },
+  cert:function(){
+    line('证书','muted'); hr();
+    line('  模式    Reloading · 换掉文件就自动生效');
+    line('  证书    '+S.certPath);
+    line('  私钥    /etc/ssl/knock/privkey.pem');
+    line('  到期    还有 '+S.certDays+' 天'+(S.certDays<30?'   ← 该续了':''));
+    hr(); line('  c) 改证书路径    r) 重新加载    q) 返回');
+  },
+  upgrade:function(){
+    line('升级','muted'); hr();
+    line('  升级要换二进制：带新的 install.sh 重跑，或者'); line('');
+    line('    curl -fsSL <地址>/knock-hub-linux -o /usr/local/bin/knock-hub.new');
+    line('    install -m755 /usr/local/bin/knock-hub.new /usr/local/bin/knock-hub');
+    line('    systemctl restart knock-node');
+    hr(); line('按 q 返回菜单','dim');
+  },
+  uninstall:function(){
+    line('卸载','muted'); hr();
+    line('  真的卸载？会停服务、删二进制。');
+    line('  [y/N]'); line('按 q 返回菜单','dim');
+  }
+};
+
+function go(name){screen=name;clearTerm();views[name]()}
+function goMenu(){pendingPort=null;go('menu')}
+
+function afterPortInput(v){
+  if(!/^\d+$/.test(v)){
+    clearTerm(); line('改端口','muted'); hr();
+    line('  端口要在 1-65535 之间','warn'); line('按 q 返回菜单','dim'); return;
+  }
+  pendingPort=Number(v);
+  clearTerm(); line('改端口','muted'); hr();
+  line('  改成 '+v+' 后：');
+  line('    · 云厂商安全组要放行 TCP '+v);
+  line('    · 旧端口可以关掉');
+  line(''); line('  确定改吗？ [y/N]');
 }
-function showCert(){
-  blank();say('  证书    '+node.certPath);say('  到期    还有 '+node.certDays+' 天');
-  say('  模式    '+node.certMode+' · 换掉文件就自动生效，不用重启');
-  if(node.certDays<30)say('！该续了（剩 '+node.certDays+' 天）','warn');
-}
-function menuPick(n){
-  awaitingMenu=false;promptEl.textContent=PROMPT;blank();
-  switch(n){
-    case '1':showStatus();break;
-    case '2':blank();boxLine(node.code);blank();say('  '+node.label+' · 端口 '+node.port,'muted');break;
-    case '3':say('-- knock-node：最近几条 --','muted');say('10月29 14:02:11 门开着：房间 R7K2M9（端口 25565）');say('10月29 14:03:02 房客进来了：冷枫小乐（直连）');say('10月29 14:09:40 房客走了：冷枫小乐');break;
-    case '4':say('✓ 重启了','ok');break;
-    case '5':node.relay=!node.relay;say('✓ 中继已'+(node.relay?'开启':'关闭'),'ok');break;
-    case '6':{var old=node.port;node.port=old===30995?30990:30995;say('✓ 端口 '+old+' → '+node.port,'ok');say('！别忘了在云厂商安全组放行 TCP '+node.port,'warn');break}
-    case '7':showCert();break;
-    case '8':say('升级请带新二进制重跑 install.sh','warn');break;
-    case '9':say('要保留配置和数据（/var/lib/knock）吗？[Y/n] Y','muted');say('✓ 二进制已删，/var/lib/knock 保留','ok');break;
-    case '0':say('再见。','muted');break;
-    default:say('没有这个选项','warn');
+
+function handle(ch){
+  if(busy) return;
+  if(screen==='menu'){
+    if(ch==='0'){clearTerm();line('再见。','muted');return}
+    var map={'1':'status','2':'code','3':'logs','4':'restart','5':'relay','6':'port','7':'cert','8':'upgrade','9':'uninstall'};
+    if(map[ch]) go(map[ch]);
+    return;
+  }
+  if(screen==='cert'){
+    if(ch==='q') return goMenu();
+    if(ch==='r'){clearTerm();views.cert();line('');line('✓ 中继已重新加载','ok');return}
+    if(ch==='c'){clearTerm();line('证书','muted');hr();line('  新的证书路径：');return}
+    return;
+  }
+  if(ch==='q') return goMenu();
+  if(ch==='y'||ch==='Y'){
+    if(screen==='restart'){clearTerm();line('重启','muted');hr();line('✓ 重启完成','ok');line('按 q 返回菜单','dim');return}
+    if(screen==='relay'){S.relay=!S.relay;clearTerm();line('开关中继','muted');hr();line('✓ 中继已'+(S.relay?'开启':'关闭'),'ok');line('按 q 返回菜单','dim');return}
+    if(screen==='uninstall'){clearTerm();line('卸载','muted');hr();line('✓ 已停止服务、删除二进制','ok');line('按 q 返回菜单','dim');return}
+    if(screen==='port'&&pendingPort){
+      var old=S.port; S.port=pendingPort; pendingPort=null;
+      clearTerm(); line('改端口','muted'); hr();
+      line('✓ 端口 '+old+' → '+S.port,'ok');
+      line('！别忘了在云厂商安全组放行 TCP '+S.port,'warn');
+      line('按 q 返回菜单','dim'); return;
+    }
   }
 }
+
 function runInstall(){
-  blank();say('正在识别系统…','muted');
-  say('✓ Debian 13 (trixie) · x86_64 · 32 核','ok');say('✓ systemd 可用','ok');say('✓ curl 可用','ok');blank();
-  say('› 节点叫什么名字？ [node-node] 香港·荃湾','muted');
-  say('› 别人连这个节点用哪个地址？ [自动探测] 154.36.165.162','muted');
-  say('› 对外开放端口？ [30990] '+node.port,'muted');
-  say('› 要带「数据中转」吗？ [Y/n] Y','muted');
-  say('  → 中继单独用哪个端口？ [30991] 30991','muted');
-  say('  → 有证书吗？给了就走 TLS，能帮打洞 [y/N] y','muted');
-  say('  → 证书路径：/etc/ssl/knock/fullchain.pem','muted');blank();
-  say('安装组件…','muted');
-  say('✓ 已安装 /usr/local/bin/knock-hub','ok');say('✓ 已安装 /usr/local/bin/iroh-relay','ok');
-  say('✓ 已安装管理命令 /usr/local/bin/knock','ok');say('✓ 配置写到 /var/lib/knock/node.json','ok');
-  say('✓ 中继走 TLS（knock.mcii.cc:30991），QUIC 地址发现开着——能帮打洞','ok');
-  say('✓ 已加每日证书检查（快到期会记进 journal）','ok');blank();
-  say('启动服务…','muted');
-  say('● knock-node.service — active (running)','ok');
-  say('● knock-relay.service — active (running)  监听 0.0.0.0:30991（TLS + UDP 30991）','ok');blank();
-  say('—— 这个节点的编码 ——','muted');say('节点码（复制这一整串发给别人）：','muted');boxLine(node.code);blank();
-  say('！安全组要放行：TCP 30990（房间）+ TCP 30991（中继）+ UDP 30991（打洞）','warn');blank();
-  say('装好了。以后用 knock 管它（直接输 knock 就是菜单）','ok');
-  node.relay=true;node.relayTls=true;
-}
-function run(raw){
-  var cmd=raw.trim();if(!cmd)return;
-  el('cmd',cmd);
-  var parts=cmd.split(/\s+/),c0=parts[0].toLowerCase();
-  if(awaitingMenu&&/^[0-9]$/.test(parts[0]))return menuPick(parts[0]);
-  if(c0==='clear'||c0==='cls'){term.innerHTML='';return}
-  if(c0==='help'){say('knock            菜单（然后按 1–9）','muted');say('knock status     服务 / 门 / 端口 / 中继','muted');say('knock code       节点码','muted');say('knock port N     改房间端口','muted');say('knock relay on|off','muted');say('knock cert       证书还剩多少天','muted');say('install          走一遍安装','muted');return}
-  if(c0==='install'||c0==='sudo')return runInstall();
-  if(c0!=='knock'){say('没这个命令：'+parts[0]+'（敲 help 看看）','warn');return}
-  switch(parts[1]){
-    case undefined:return showMenu();
-    case 'status':return showStatus();
-    case 'code':blank();boxLine(node.code);blank();return;
-    case 'port':{var p=parts[2];if(!/^\d+$/.test(p||'')){say('用法：knock port <1-65535>','warn');return}var o=node.port;node.port=Number(p);say('✓ 端口 '+o+' → '+node.port,'ok');say('！别忘了在云厂商安全组放行 TCP '+node.port,'warn');return}
-    case 'relay':{var w=parts[2];if(w!=='on'&&w!=='off'){say('用法：knock relay on|off','warn');return}node.relay=w==='on';say('✓ 中继已'+(node.relay?'开启':'关闭'),'ok');return}
-    case 'cert':return showCert();
-    case 'logs':say('-- journalctl -u knock-node --','muted');say('10月29 14:02:11 接口已启动：:30990');return;
-    case 'restart':say('✓ 重启了','ok');return;
-    default:say('没这个子命令：'+parts[1],'warn');
+  busy=true; clearTerm();
+  var steps=[
+    ['正在识别系统…','muted',420],
+    ['✓ Debian 13 (trixie) · x86_64 · 32 核','ok',180],
+    ['✓ systemd 可用','ok',140],
+    ['✓ curl 可用','ok',140],
+    ['','',160],
+    ['› 节点叫什么名字？ [node-node] 香港·荃湾','muted',260],
+    ['› 别人连这个节点用哪个地址？ [自动探测] 154.36.165.162','muted',300],
+    ['› 对外开放端口？ [30990] '+S.port,'muted',240],
+    ['› 要带「数据中转」吗？ [Y/n] Y','muted',280],
+    ['  → 中继单独用哪个端口？ [30991] 30991','muted',260],
+    ['  → 有证书吗？给了就走 TLS，能帮打洞 [y/N] y','muted',320],
+    ['  → 证书路径：/etc/ssl/knock/fullchain.pem','muted',260],
+    ['','',200],
+    ['下载组件…','muted',200],
+    ['  knock-hub    ████████████████████  100%','acc',520],
+    ['  iroh-relay   ████████████████████  100%','acc',560],
+    ['✓ 已安装 /usr/local/bin/knock-hub','ok',160],
+    ['✓ 已安装 /usr/local/bin/iroh-relay','ok',160],
+    ['✓ 已安装管理命令 /usr/local/bin/knock','ok',160],
+    ['✓ 配置写到 /var/lib/knock/node.json','ok',160],
+    ['✓ 中继走 TLS，QUIC 地址发现开着——能帮打洞','ok',240],
+    ['✓ 已加每日证书检查','ok',160],
+    ['','',200],
+    ['启动服务…','muted',400],
+    ['● knock-node.service — active (running)','ok',300],
+    ['● knock-relay.service — active (running)  0.0.0.0:'+S.relayPort+'（TLS + UDP '+S.relayPort+'）','ok',320],
+    ['','',200],
+    ['—— 这个节点的编码 ——','muted',200],
+    ['节点码（复制这一整串发给别人）：','muted',240],
+    ['','',120],
+    ['  '+S.code,'acc',340],
+    ['','',140],
+    ['！安全组放行：TCP '+S.port+'（房间）+ TCP '+S.relayPort+'（中继）+ UDP '+S.relayPort+'（打洞）','warn',400],
+    ['','',140],
+    ['装好了。以后输 knock 就是菜单。','ok',260]
+  ];
+  var i=0;
+  function next(){
+    if(i>=steps.length){busy=false;goMenu();return}
+    var st=steps[i++];
+    if(st[0])line(st[0],st[1]);
+    setTimeout(next,st[2]);
   }
+  next();
 }
-var history=[],hIdx=0;
+
 input.addEventListener('keydown',function(e){
-  if(e.key==='Enter'){var v=input.value;input.value='';run(v);if(v.trim()){history.push(v);hIdx=history.length}if(!awaitingMenu)promptEl.textContent=PROMPT}
-  else if(e.key==='ArrowUp'){if(hIdx>0){input.value=history[--hIdx]||'';e.preventDefault()}}
-  else if(e.key==='ArrowDown'){if(hIdx<history.length-1)input.value=history[++hIdx]||'';else{input.value='';hIdx=history.length}}
+  if(e.key==='Enter'){
+    var v=input.value.trim(); input.value='';
+    if(screen==='port'){
+      if(v==='q'||v==='Q'){goMenu();return}
+      afterPortInput(v); return;
+    }
+    if(/^[0-9]$/.test(v)){handle(v);return}
+    if(/^[a-zA-Z]$/.test(v)){handle(v.toLowerCase());return}
+  }
 });
+window.addEventListener('keydown',function(e){
+  if(e.key.length!==1)return;
+  if(document.activeElement===input)return;   // 输入框里的键盘事件交给上面的处理
+  handle(e.key); e.preventDefault();
+});
+document.getElementById('install').addEventListener('click',runInstall);
+document.getElementById('reset').addEventListener('click',function(){goMenu();input.focus()});
 term.addEventListener('click',function(){input.focus()});
-document.querySelectorAll('.chip').forEach(function(c){c.addEventListener('click',function(){run(c.dataset.cmd);input.focus()})});
-document.getElementById('install').addEventListener('click',function(){runInstall();input.focus()});
-document.getElementById('clear').addEventListener('click',function(){term.innerHTML='';input.focus()});
-say('装好了。敲 knock 开菜单，或者点下面的按钮。','muted');
-say('（模拟器，随便折腾，刷新就复位）','dim');blank();input.focus();
+
+goMenu(); input.focus();
+
 var qs=new URLSearchParams(location.search);
-qs.getAll('run').forEach(function(c){run(c)});
+if(qs.get('keys')){[].forEach.call(qs.get('keys'),function(k){handle(k)})}
+if(qs.get('install'))runInstall();
 </script>
 </body>
 </html>

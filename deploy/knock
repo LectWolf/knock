@@ -160,24 +160,209 @@ uninstall() {
   if [[ "${keep:-Y}" =~ ^[Yy] ]]; then ok "二进制已删，$DATA_DIR 保留"; else rm -rf "$DATA_DIR"; ok "全清了"; fi
 }
 
+# ————————————————————————————————————————————————
+# 界面：整屏刷新，不是日志滚动
+#
+# 每个操作都是「画一屏 → 等你操作 → 按 q 回菜单」，
+# 而不是把输出一行行堆上去。这样你看的是"现在是什么状态"，不是"刚才发生了什么"。
+# ————————————————————————————————————————————————
+W=52
+hr() { printf '%s\n' "$(printf '─%.0s' $(seq 1 $W))"; }
+
+screen() { # screen <标题>
+  clear
+  printf '%s\n' "$C_MUT$1$C_OFF"
+  hr
+}
+
+back_hint() {
+  printf '\n%s按 q 返回菜单%s ' "$C_MUT" "$C_OFF"
+  local k
+  read -rsn1 k || true
+  [[ "$k" == "q" || "$k" == "Q" ]] || true
+}
+
+confirm() { # confirm <问题> -> 0/1
+  printf '%s\n' "$1"
+  printf '%s[y/N]%s ' "$C_ACC" "$C_OFF"
+  local a
+  read -r a || true
+  [[ "${a:-n}" =~ ^[Yy] ]]
+}
+
+draw_menu() {
+  local active name port relay_rp
+  active="$(systemctl is-active $UNIT 2>/dev/null || true)"
+  name="$(json_str name)"
+  port="$(json_num public_port)"
+  relay_rp="$(json_str relay_public_port)"
+  clear
+  printf '%s  Knock 节点管理%s\n' "$C_ACC" "$C_OFF"
+  hr
+  printf '  %-10s %s\n' "节点" "${name:-未命名}"
+  printf '  %-10s %s%s%s\n' "服务" "$C_OK" "$active" "$C_OFF"
+  printf '  %-10s 房间 %s%s\n' "端口" "$port" "$([[ -n "$relay_rp" ]] && echo " · 中继 $relay_rp")"
+  printf '  %-10s %s\n' "中继" "$([[ -n "$(json_str relay_url)" ]] && echo "开" || echo "关（只做信令）")"
+  hr
+  printf '   1) 状态        2) 节点码      3) 日志\n'
+  printf '   4) 重启        5) 开关中继    6) 改端口\n'
+  printf '   7) 证书        8) 升级        9) 卸载\n'
+  printf '   0) 退出\n'
+  hr
+  printf '选一个：'
+}
+
+view_status() {
+  screen "状态"
+  status | sed 's/^/  /'
+  back_hint
+}
+
+view_code() {
+  local raw code
+  screen "节点码"
+  raw="$($BIN -config "$CFG" -data-dir "$DATA_DIR" -print-code 2>/dev/null || true)"
+  code="$(printf '%s' "$raw" | grep -oE '[0-9A-HJKMNP-TV-Z]{20,}' | head -1)"
+  if [[ -n "$code" ]]; then
+    printf '\n  %s%s%s\n\n' "$C_ACC" "$code" "$C_OFF"
+    printf '  %s整串发给朋友，他粘进客户端就能敲%s\n' "$C_MUT" "$C_OFF"
+  else
+    warn "没拿到节点码（journalctl -u $UNIT | grep 节点码）"
+  fi
+  back_hint
+}
+
+view_logs() {
+  screen "日志（最近 15 条）"
+  journalctl -u $UNIT -n 15 --no-pager -o cat 2>/dev/null | sed 's/^/  /'
+  back_hint
+}
+
+act_restart() {
+  screen "重启"
+  if confirm "确定重启节点服务？已经连着的房客会断。"; then
+    systemctl restart $UNIT
+    sleep 1
+    systemctl is-active --quiet $UNIT && ok "重启完成" || warn "没起来，看 3) 日志"
+  else
+    dim "取消"
+  fi
+  back_hint
+}
+
+act_relay() {
+  local on
+  screen "开关中继"
+  if [[ -n "$(json_str relay_url)" ]]; then
+    printf '  现在：%s开%s（%s）\n\n' "$C_OK" "$C_OFF" "$(json_str relay_url)"
+    if confirm "要关掉中继吗？关掉后直连打不通的人就进不来了。"; then relay_toggle off; else dim "取消"; fi
+  else
+    printf '  现在：%s关%s（只做信令）\n\n' "$C_MUT" "$C_OFF"
+    if confirm "要打开中继吗？需要这台机装了 iroh-relay。"; then relay_toggle on; else dim "取消"; fi
+  fi
+  back_hint
+}
+
+act_port() {
+  local old new
+  screen "改端口"
+  old="$(json_num public_port)"
+  printf '  现在：房间服务监听 %s\n\n' "$old"
+  printf '  新端口（直接回车取消）：'
+  read -r new || true
+  if [[ -z "${new:-}" ]]; then dim "取消"; back_hint; return; fi
+  if ! [[ "$new" =~ ^[0-9]+$ ]] || (( new < 1 || new > 65535 )); then
+    warn "端口要在 1-65535 之间"; back_hint; return
+  fi
+  printf '\n  改成 %s 后：\n' "$new"
+  printf '    · 云厂商安全组要放行 TCP %s\n' "$new"
+  printf '    · 旧端口可以关掉\n'
+  if confirm "确定改吗？"; then set_port "$new"; else dim "取消"; fi
+  back_hint
+}
+
+act_cert() {
+  local mode cert key new
+  screen "证书"
+  mode="$(sed -n 's/.*cert_mode *= *"\([^"]*\)".*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  cert="$(sed -n 's/.*manual_cert_path *= *"\([^"]*\)".*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  key="$(sed -n 's/.*manual_key_path *= *"\([^"]*\)".*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  printf '  模式    %s\n' "${mode:-未配置 TLS}"
+  printf '  证书    %s\n' "${cert:-—}"
+  printf '  私钥    %s\n' "${key:-—}"
+  if [[ -n "$cert" && -f "$cert" ]]; then
+    local end days
+    end="$(openssl x509 -enddate -noout -in "$cert" 2>/dev/null | cut -d= -f2)"
+    local end_ts now_ts
+    end_ts="$(date -d "$end" +%s 2>/dev/null || echo 0)"
+    now_ts="$(date +%s)"
+    days=$(( (end_ts - now_ts) / 86400 ))
+    printf '  到期    %s（还有 %s 天）\n' "$end" "$days"
+    (( days < 30 )) && printf '  %s！该续了%s\n' "$C_WARN" "$C_OFF"
+  fi
+  hr
+  printf '  c) 改证书路径    r) 重新加载    q) 返回\n'
+  printf '选一个：'
+  read -rsn1 new || true
+  case "$new" in
+    c)
+      printf '\n\n  新的证书路径：'
+      read -r new || true
+      [[ -f "${new:-}" ]] || { warn "文件不存在"; back_hint; return; }
+      local newkey
+      printf '  新的私钥路径（回车 = 不变）：'
+      read -r newkey || true
+      [[ -n "${newkey:-}" ]] || newkey="$key"
+      [[ -f "$newkey" ]] || { warn "私钥文件不存在"; back_hint; return; }
+      sed -i "s|manual_cert_path *= *\"[^\"]*\"|manual_cert_path = \"$new\"|; s|manual_key_path *= *\"[^\"]*\"|manual_key_path = \"$newkey\"|" "$RELAY_TOML"
+      # Reloading 模式下换文件即生效；仍旧重启一次更稳
+      systemctl restart knock-relay >/dev/null 2>&1 || true
+      ok "已更新，中继重启过";;
+    r)
+      systemctl restart knock-relay >/dev/null 2>&1 || true
+      ok "中继已重新加载";;
+    *) dim "返回";;
+  esac
+  back_hint
+}
+
+act_upgrade() {
+  screen "升级"
+  printf '  升级要换二进制：带新的 install.sh 重跑，或者\n\n'
+  printf '    curl -fsSL <新地址>/knock-hub-linux -o /usr/local/bin/knock-hub.new\n'
+  printf '    install -m755 /usr/local/bin/knock-hub.new /usr/local/bin/knock-hub\n'
+  printf '    systemctl restart knock-node\n\n'
+  printf '  %s实例里不联网拉，避免升级到一半断网。%s\n' "$C_MUT" "$C_OFF"
+  back_hint
+}
+
+act_uninstall() {
+  screen "卸载"
+  if confirm "真的卸载？会停服务、删二进制。"; then
+    uninstall
+  else
+    dim "取消"
+  fi
+  back_hint
+}
+
 menu() {
+  local choice
   while true; do
-    echo
-    printf '%sKnock 节点管理%s\n\n' "$C_ACC" "$C_OFF"
-    printf '  1) 状态\n  2) 节点码\n  3) 日志\n  4) 重启\n  5) 开关中继\n  6) 改端口\n  7) 证书\n  8) 升级\n  9) 卸载\n  0) 退出\n\n'
-    read -r -p "选一个： " choice
+    draw_menu
+    read -rsn1 choice || choice=0
     case "$choice" in
-      1) status;;
-      2) code;;
-      3) journalctl -u $UNIT -n 40 --no-pager;;
-      4) need_root && systemctl restart $UNIT && ok "重启了";;
-      5) need_root; read -r -p "开还是关？[on/off] " w; relay_toggle "$w";;
-      6) need_root; read -r -p "新的房间服务端口： " p; set_port "$p";;
-      7) cert;;
-      8) warn "升级请带新二进制重跑 install.sh";;
-      9) uninstall; break;;
-      0|"") break;;
-      *) warn "没有这个选项";;
+      1) view_status;;
+      2) view_code;;
+      3) view_logs;;
+      4) act_restart;;
+      5) act_relay;;
+      6) act_port;;
+      7) act_cert;;
+      8) act_upgrade;;
+      9) act_uninstall;;
+      0|q|Q) clear; break;;
+      *) ;;
     esac
   done
 }
