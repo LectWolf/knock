@@ -34,6 +34,12 @@ impl SessionEntry {
 struct Inner {
     /// 现在门里有哪些人
     live: HashMap<Peer, SessionEntry>,
+    /// 每个人身上挂着几条连接。
+    ///
+    /// 同一个人会有两条：敲门时那条常驻连接（名册靠它在），
+    /// 加上他 MC 每开一条 TCP 就又拨一条。谁先断都不能把人从名册里删掉，
+    /// 只有最后一条断了才算他走了。
+    conns: HashMap<Peer, usize>,
     /// 本房间踢过谁（关门即忘，不落盘）
     kicked: HashSet<Peer>,
     /// 门是不是正在关
@@ -56,15 +62,17 @@ impl SessionList {
         Self {
             inner: Mutex::new(Inner {
                 live: HashMap::new(),
+                conns: HashMap::new(),
                 kicked: HashSet::new(),
                 closing: false,
             }),
         }
     }
 
-    /// 放人进来之后登记一下。同一个人重复登记时保留最早的时间。
+    /// 放人进来之后登记一下。同一个人重复登记时保留最早的时间，连接数加一。
     pub fn join(&self, peer: Peer, nickname: &str, via_relay: bool) {
         let mut inner = self.lock();
+        *inner.conns.entry(peer).or_insert(0) += 1;
         inner.live.entry(peer).or_insert_with(|| SessionEntry {
             nickname: nickname.to_string(),
             via_relay,
@@ -72,15 +80,27 @@ impl SessionList {
         });
     }
 
-    /// 人走了（自己断的，或被踢的）。
+    /// 一条连接断了。还有别的连接挂着就只是减一，最后一条断了才算人走了。
     pub fn leave(&self, peer: &Peer) {
-        self.lock().live.remove(peer);
+        let mut inner = self.lock();
+        match inner.conns.get_mut(peer) {
+            Some(n) if *n > 1 => *n -= 1,
+            Some(_) => {
+                inner.conns.remove(peer);
+                inner.live.remove(peer);
+            }
+            None => {
+                // 没登记过（或已经被踢）：兜底删干净，不留幽灵
+                inner.live.remove(peer);
+            }
+        }
     }
 
     /// 踢出去：断他的会话，并且在本房间内记住他，别让他再敲进来。
     pub fn kick(&self, peer: &Peer) {
         let mut inner = self.lock();
         inner.live.remove(peer);
+        inner.conns.remove(peer);
         inner.kicked.insert(*peer);
     }
 
@@ -263,5 +283,40 @@ mod tests {
         let list = SessionList::new();
         list.join(peer(1), "小张", false);
         assert!(list.snapshot()[0].1.elapsed_secs() < 5);
+    }
+
+    /// 同一个人两条连接：敲门那条 + MC 那条。
+    /// MC 断了只是少一条，名册里还得有人；两条都断才算走。
+    #[test]
+    fn a_guest_with_two_connections_survives_one_closing() {
+        let list = SessionList::new();
+        let p = peer(9);
+        list.join(p, "冷枫小乐", false); // 敲门那条
+        list.join(p, "冷枫小乐", false); // MC 那条
+        assert_eq!(list.len(), 1);
+
+        list.leave(&p); // MC 断开
+        assert_eq!(list.len(), 1, "还有一条挂着，人不能消失");
+
+        list.leave(&p); // 敲门那条也断了
+        assert_eq!(list.len(), 0, "全断了就是走了");
+    }
+
+    /// 踢人不受计数影响：踢了就是踢了。
+    #[test]
+    fn kicking_beats_the_refcount() {
+        let list = SessionList::new();
+        let p = peer(10);
+        list.join(p, "冷枫小乐", false);
+        list.join(p, "冷枫小乐", false);
+
+        list.kick(&p);
+        assert_eq!(list.len(), 0);
+        assert_eq!(
+            list.admit(&hello(PROTO_VERSION), &p),
+            Reply::False {
+                reason: RejectReason::Kicked
+            }
+        );
     }
 }
