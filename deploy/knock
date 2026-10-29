@@ -1,69 +1,75 @@
 #!/usr/bin/env bash
 # knock —— 节点管理命令。不带参数就是菜单。
 #
-#   knock            菜单
-#   knock status     服务状态、房间数
-#   knock code       节点码
-#   knock logs [-f]  日志
-#   knock restart    重启
-#   knock relay on|off  开关数据中转（改配置并重启）
-#   knock uninstall  卸载（问你要不要留配置）
+#   knock              菜单
+#   knock status       服务状态、房间数、中继
+#   knock code         节点码
+#   knock logs [-f]    日志
+#   knock restart      重启
+#   knock relay on|off 开关数据中转（改配置并重启）
+#   knock uninstall    卸载（问你要不要留配置）
 set -uo pipefail
 
 DATA_DIR="${KNOCK_DATA_DIR:-/var/lib/knock}"
 CFG="$DATA_DIR/node.json"
 UNIT=knock-node
-RELAY_UNIT_FILE=/etc/systemd/system/knock-relay.service
 C_ACC=$'\033[38;5;179m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_MUT=$'\033[90m'; C_OFF=$'\033[0m'
 ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$*"; }
 warn() { printf '%s！%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
 dim()  { printf '%s%s%s\n' "$C_MUT" "$*" "$C_OFF"; }
 
+json_str() { sed -n 's/.*"'"$1"'": *"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null; }
+json_num() { sed -n 's/.*"'"$1"'": *\([0-9]*\).*/\1/p' "$CFG" 2>/dev/null; }
+
 need_root() { [[ ${EUID:-0} -eq 0 ]] || { warn "这个操作要 root：sudo knock …"; exit 1; }; }
 
 status() {
-  local active since rooms relay name
+  local active since name relay port body rooms relay_line
   active="$(systemctl is-active $UNIT 2>/dev/null || true)"
   since="$(systemctl show -p ActiveEnterTimestamp --value $UNIT 2>/dev/null || true)"
-  if [[ -f "$CFG" ]]; then
-    name="$(sed -n 's/.*"name": *"\([^"]*\)".*/\1/p' "$CFG")"
-    relay="$(sed -n 's/.*"relay_url": *"\([^"]*\)".*/\1/p' "$CFG")"
-  fi
-  local body
-  body="$(curl -fsS --max-time 3 "http://127.0.0.1:$(sed -n 's/.*"public_port": *\([0-9]*\).*/\1/p' "$CFG")/healthz" 2>/dev/null || true)"
+  name="$(json_str name)"
+  relay="$(json_str relay_url)"
+  port="$(json_num public_port)"
+  body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
   rooms="$(printf '%s' "$body" | sed -n 's/.*"rooms":\([0-9]*\).*/\1/p')"
+  if [[ -n "$relay" ]]; then relay_line="开 · 与房间服务共用 ${port} 端口"; else relay_line="未开启（只做信令）"; fi
   printf '  服务    %s%s%s  %s\n' "$C_OK" "$active" "$C_OFF" "${since:+自 $since}"
   printf '  节点    %s\n' "${name:-未知}"
   printf '  门      %s 扇开着\n' "${rooms:-?}"
-  printf '  中继    %s\n' "${relay:+开 · 共用同一个端口}${relay:-未开启（只做信令）}"
+  printf '  中继    %s\n' "$relay_line"
 }
 
 code() {
-  printf '\n  %s%s%s\n\n' "$C_ACC" "$(/usr/local/bin/knock-hub -config "$CFG" -data-dir "$DATA_DIR" -print-code 2>/dev/null | tr -d '[:space:]')" "$C_OFF"
+  local raw node_code
+  raw="$(/usr/local/bin/knock-hub -config "$CFG" -data-dir "$DATA_DIR" -print-code 2>/dev/null || true)"
+  node_code="$(printf '%s' "$raw" | grep -oE '[0-9A-HJKMNP-TV-Z]{20,}' | head -1)"
+  if [[ -z "$node_code" ]]; then warn "没拿到节点码：journalctl -u knock-node | grep 节点码"; return; fi
+  printf '\n  %s%s%s\n\n' "$C_ACC" "$node_code" "$C_OFF"
 }
 
-relay_toggle() { # relay_toggle on|off
+relay_toggle() {
   need_root
   [[ -f "$CFG" ]] || { warn "找不到 $CFG"; exit 1; }
-  local want="$1" port addr
-  port="$(sed -n 's/.*"public_port": *\([0-9]*\).*/\1/p' "$CFG")"
-  addr="$(sed -n 's/.*"ipv4": *"\([^"]*\)".*/\1/p' "$CFG")"
-  if [[ "$want" == "on" ]]; then
-    sed -i 's|"relay_url": *"[^"]*"|"relay_url": "http://'"$addr:$port"'"|; s|"relay_local": *"[^"]*"|"relay_local": "127.0.0.1:30991"|; s|"relay_allowed": *false|"relay_allowed": true|; s|"allow_plain_relay": *false|"allow_plain_relay": true|' "$CFG"
-    systemctl enable --now knock-relay >/dev/null 2>&1 || warn "knock-relay 没起来，确认 iroh-relay 装过"
-    ok "中继已开启（共用 $port）"
-  else
-    sed -i 's|"relay_url": *"[^"]*"|"relay_url": ""|; s|"relay_local": *"[^"]*"|"relay_local": ""|; s|"relay_allowed": *true|"relay_allowed": false|' "$CFG"
-    systemctl disable --now knock-relay >/dev/null 2>&1 || true
-    ok "中继已关闭（只做信令）"
-  fi
-  systemctl restart $UNIT
-  sleep 1
+  local want="${1:-}" port addr
+  port="$(json_num public_port)"; addr="$(json_str ipv4)"
+  case "$want" in
+    on)
+      sed -i 's|"relay_url": *"[^"]*"|"relay_url": "http://'"$addr:$port"'"|; s|"relay_local": *"[^"]*"|"relay_local": "127.0.0.1:30991"|; s|"relay_allowed": *false|"relay_allowed": true|; s|"allow_plain_relay": *false|"allow_plain_relay": true|' "$CFG"
+      systemctl enable --now knock-relay >/dev/null 2>&1 || warn "knock-relay 没起来（iroh-relay 装了吗？）"
+      ok "中继已开启（共用 $port）" ;;
+    off)
+      sed -i 's|"relay_url": *"[^"]*"|"relay_url": ""|; s|"relay_local": *"[^"]*"|"relay_local": ""|; s|"relay_allowed": *true|"relay_allowed": false|' "$CFG"
+      systemctl disable --now knock-relay >/dev/null 2>&1 || true
+      ok "中继已关闭（只做信令）" ;;
+    *) warn "用法：knock relay on|off"; return 1;;
+  esac
+  systemctl restart $UNIT; sleep 1
   systemctl is-active --quiet $UNIT && ok "服务已重启" || warn "服务没起来：journalctl -u $UNIT -n 30"
 }
 
 uninstall() {
   need_root
+  local keep
   read -r -p "要保留配置和数据（$DATA_DIR）吗？[Y/n] " keep
   systemctl disable --now $UNIT >/dev/null 2>&1 || true
   systemctl disable --now knock-relay >/dev/null 2>&1 || true
@@ -83,9 +89,9 @@ menu() {
       1) status;;
       2) code;;
       3) journalctl -u $UNIT -n 40 --no-pager;;
-      4) need_root; systemctl restart $UNIT && ok "重启了";;
+      4) need_root && systemctl restart $UNIT && ok "重启了";;
       5) need_root; read -r -p "开还是关？[on/off] " w; relay_toggle "$w";;
-      6) need_root; warn "升级请重跑 install.sh（带新二进制），这里不联网拉";;
+      6) warn "升级请带新二进制重跑 install.sh";;
       7) uninstall; break;;
       0|"") break;;
       *) warn "没有这个选项";;
@@ -97,7 +103,7 @@ case "${1:-menu}" in
   status) status;;
   code) code;;
   logs) shift; journalctl -u $UNIT -n 80 --no-pager "$@";;
-  restart) need_root; systemctl restart $UNIT && ok "重启了";;
+  restart) need_root && systemctl restart $UNIT && ok "重启了";;
   relay) relay_toggle "${2:-}";;
   uninstall) uninstall;;
   menu) menu;;
