@@ -144,3 +144,12 @@ ssh -p 19508 root@<主机> 'chmod +x /usr/local/bin/knock-hub.new   && cp /usr/l
   iroh 流量本身端到端加密，中继只看到密文，但明文端口不合规也容易被中间设备干扰。
 - 验证：从外网 `curl http://<节点IP>:30991/` 应返回 200；端到端测试
   `KNOCK_RELAY_URL=http://<节点IP>:30991 cargo test --test transport_e2e a_failed_punch -- --ignored` 应绿。
+
+## 单端口 + 安装时选中继（2026-10-30）
+
+节点现在**只对外开一个端口**：房间登记和中继共用它，中继进程只监听 `127.0.0.1:30991`，
+`knock-hub` 按路径把 `/rooms`、`/healthz` 之外的请求转给它（`relay_local` 字段）。
+
+安装：`sudo ./install.sh`，四个问题（名字 / 对外地址 / 端口 / 要不要中继），装完自启动。
+管理：`knock`（菜单）、`knock status`、`knock code`、`knock relay on|off`、`knock uninstall`。
+演示：`docs/install-demo.html`（模拟安装过程）。

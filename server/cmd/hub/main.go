@@ -167,7 +167,7 @@ func main() {
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
-		Handler:           api.Handler(),
+		Handler:           api.HandlerWithRelay(cfg.RelayLocal),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

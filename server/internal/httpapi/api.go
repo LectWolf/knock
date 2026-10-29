@@ -28,6 +28,9 @@
 package httpapi
 
 import (
+	"net/http/httputil"
+	"net/url"
+	"strings"
 	"encoding/json"
 	"errors"
 	"math"
@@ -102,6 +105,37 @@ func New(svc *rooms.Service, opts ...Option) *API {
 }
 
 // Handler 返回带路由的 http.Handler。
+//
+// 如果这台机同时跑中继（iroh-relay 只监听环回），可以把话务一起吞进来：
+// 走 /rooms、/healthz 的是本服务，其余路径整条转给中继。
+// 这样对外**只开一个端口**——玩家那边少一个要解释的东西，
+// 节点主人也少一条防火墙规则。
+func (a *API) HandlerWithRelay(relayLocal string) http.Handler {
+	base := a.Handler()
+	if relayLocal == "" {
+		return base
+	}
+	target, err := url.Parse("http://" + relayLocal)
+	if err != nil {
+		return base
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, e error) {
+		http.Error(w, "中继暂时不可用", http.StatusBadGateway)
+	}
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/healthz",
+			strings.HasPrefix(r.URL.Path, "/rooms"):
+			base.ServeHTTP(w, r)
+		default:
+			// 中继的 /relay、/ping、/probe… 原样交给它
+			proxy.ServeHTTP(w, r)
+		}
+	})
+}
+
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /rooms", a.createRoom)

@@ -1,176 +1,208 @@
-#!/bin/sh
-# Knock 节点一条命令安装脚本（Linux）。
+#!/usr/bin/env bash
+# Knock 节点安装脚本（Debian/Ubuntu + systemd）
 #
-#   curl -fsSL https://raw.githubusercontent.com/OWNER/knock/main/deploy/install.sh | sh
+# 交互安装：  sudo ./install.sh
+# 全自动：    sudo ./install.sh --yes --name 枣庄-14900K --addr 202.189.15.149 --port 30990 --relay
 #
-# 常用变体：
-#   sh install.sh --domain relay.example.com --port 8443
-#   sh install.sh --ip 203.0.113.7 --no-relay
-#   sh install.sh --binary ./bin/knock-hub        # 用本地二进制，不下载
-#
-# 只做三件事：装二进制、写配置、起 systemd。不做别的、不装依赖。
-set -eu
+# 关键设计：
+#   * 对外**只开一个端口**：房间登记 +（可选）数据中转共用一个，
+#     中继本身只监听 127.0.0.1，由 knock-hub 按路径转进来。
+#   * 装完 systemd 自启动，掉线自动拉起。
+#   * 额外装一个 `knock` 管理命令（不带参数就是菜单）。
+set -euo pipefail
 
-DATA_DIR=/var/lib/knock
-BIN_PATH=/usr/local/bin/knock-hub
-UNIT_PATH=/etc/systemd/system/knock-node.service
-REPO="${KNOCK_REPO:-OWNER/knock}"
-VERSION="${KNOCK_VERSION:-latest}"
+DATA_DIR="${KNOCK_DATA_DIR:-/var/lib/knock}"
+BIN_DIR="${KNOCK_BIN_DIR:-/usr/local/bin}"
+NODE_UNIT=/etc/systemd/system/knock-node.service
+RELAY_UNIT=/etc/systemd/system/knock-relay.service
+RELAY_TOML=/etc/knock-relay.toml
 
-DOMAIN=""
-IP=""
-PORT="8443"
-RELAY="true"
-LOCAL_BINARY=""
+C_ACC=$'\033[38;5;179m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_MUT=$'\033[90m'; C_OFF=$'\033[0m'
+ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$*"; }
+warn() { printf '%s！%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
+dim()  { printf '%s%s%s\n' "$C_MUT" "$*" "$C_OFF"; }
 
-usage() {
-	cat <<'EOF'
-Knock 节点安装脚本
-
-参数：
-  --domain <域名>    节点对外域名（推荐：IP 变了不用重发节点码）
-  --ip <地址>        节点对外 IPv4/IPv6（没有域名时用）
-  --port <端口>      对外端口，默认 8443
-  --no-relay         只做信令，不替别人转发流量
-  --binary <路径>    用本地编译好的 knock-hub，不联网下载
-  --data-dir <路径>  数据目录，默认 /var/lib/knock
-  -h, --help         这个帮助
-
-装完会把节点码打印出来，那一串就是别人要粘贴的东西。
-EOF
-}
-
-while [ $# -gt 0 ]; do
-	case "$1" in
-	--domain) DOMAIN="${2:?--domain 需要值}"; shift 2 ;;
-	--ip) IP="${2:?--ip 需要值}"; shift 2 ;;
-	--port) PORT="${2:?--port 需要值}"; shift 2 ;;
-	--no-relay) RELAY="false"; shift ;;
-	--binary) LOCAL_BINARY="${2:?--binary 需要路径}"; shift 2 ;;
-	--data-dir) DATA_DIR="${2:?--data-dir 需要路径}"; shift 2 ;;
-	-h | --help) usage; exit 0 ;;
-	*) echo "不认识的参数：$1" >&2; usage >&2; exit 2 ;;
-	esac
+NAME=""; ADDR=""; PORT=""; DOMAIN=""; RELAY=""; BUNDLE=""; BASE_URL=""; YES=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --name) NAME="$2"; shift 2;;
+    --addr|--ip) ADDR="$2"; shift 2;;
+    --port) PORT="$2"; shift 2;;
+    --domain) DOMAIN="$2"; shift 2;;
+    --relay) RELAY=1; shift;;
+    --no-relay) RELAY=0; shift;;
+    --bundle) BUNDLE="$2"; shift 2;;
+    --url) BASE_URL="$2"; shift 2;;
+    --binary) BUNDLE="$(dirname "$2")"; shift 2;;
+    --data-dir) DATA_DIR="$2"; shift 2;;
+    --yes|-y) YES=1; shift;;
+    -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
+    *) warn "不认识的参数：$1"; exit 2;;
+  esac
 done
 
-if [ "$(id -u)" -ne 0 ]; then
-	echo "需要 root 才能装成系统服务。请用 sudo 重新执行。" >&2
-	exit 1
+[[ ${EUID:-0} -eq 0 ]] || { warn "请用 root 跑（sudo）"; exit 1; }
+command -v systemctl >/dev/null || { warn "需要 systemd（Debian/Ubuntu）"; exit 1; }
+
+ask() { # ask <问题> <默认>
+  local q="$1" def="${2:-}" ans=""
+  if (( YES )); then printf '%s' "$def"; return; fi
+  printf '%s%s%s [%s] ' "$C_ACC" "$q" "$C_OFF" "$def"
+  read -r ans || true
+  printf '%s' "${ans:-$def}"
+}
+ask_yn() { # ask_yn <问题> <默认 y|n>
+  local q="$1" def="${2:-y}" ans=""
+  if (( YES )); then [[ $def == y ]]; return; fi
+  printf '%s%s%s [%s] ' "$C_ACC" "$q" "$C_OFF" "$([[ $def == y ]] && echo 'Y/n' || echo 'y/N')"
+  read -r ans || true
+  [[ "${ans:-$def}" =~ ^[Yy] ]]
+}
+
+echo
+dim "正在识别系统…"
+. /etc/os-release 2>/dev/null || true
+ok "${PRETTY_NAME:-Linux} · $(uname -m) · $(nproc) 核"
+ok "systemd 可用"
+command -v curl >/dev/null && ok "curl 可用" || { warn "先装 curl：apt install -y curl"; exit 1; }
+echo
+
+[[ -n "$NAME" ]] || NAME="$(ask "节点叫什么名字？" "node-$(hostname -s)")"
+if [[ -z "$ADDR" ]]; then
+  DETECTED="$(curl -fsS --max-time 4 https://api.ipify.org 2>/dev/null || true)"
+  ADDR="$(ask "别人连这个节点用哪个地址？" "${DETECTED:-}")"
+fi
+[[ -n "$PORT" ]] || PORT="$(ask "对外开放端口？" "30990")"
+if [[ -z "$RELAY" ]]; then
+  ask_yn "要带「数据中转」吗？直连打不通时可以让流量绕这里。" y && RELAY=1 || RELAY=0
 fi
 
-if ! command -v systemctl >/dev/null 2>&1; then
-	echo "没有 systemd，这个脚本不适用。可以直接跑：knock-hub -data-dir $DATA_DIR" >&2
-	exit 1
+[[ "$ADDR" =~ ^[A-Za-z0-9.:\ -]+$ ]] || { warn "地址不对：$ADDR"; exit 1; }
+[[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT > 0 && PORT < 65536 )) || { warn "端口不对：$PORT"; exit 1; }
+
+SCHEME=http; RELAY_URL=""; ALLOW_PLAIN=false; RELAY_LOCAL=""
+if (( RELAY )); then
+  if [[ -n "$DOMAIN" ]]; then SCHEME=https
+  else
+    dim "  好，中继和房间服务共用 $PORT 这一个端口（明文 http；要 https 用 --domain 配反代证书）"
+    ALLOW_PLAIN=true
+  fi
+  RELAY_URL="$SCHEME://$ADDR:$PORT"
+  RELAY_LOCAL=127.0.0.1:30991
 fi
+echo
 
-# —— 1. 放二进制 ——
-if [ -n "$LOCAL_BINARY" ]; then
-	[ -f "$LOCAL_BINARY" ] || { echo "找不到 $LOCAL_BINARY" >&2; exit 1; }
-	install -m 0755 "$LOCAL_BINARY" "$BIN_PATH"
-	echo "已安装本地二进制：$LOCAL_BINARY"
-else
-	case "$(uname -m)" in
-	x86_64 | amd64) ARCH=amd64 ;;
-	aarch64 | arm64) ARCH=arm64 ;;
-	*) echo "不支持的架构：$(uname -m)" >&2; exit 1 ;;
-	esac
+fetch_bin() { # fetch_bin <源文件名> <目标>
+  local src="$1" dst="$2"
+  if [[ -n "$BUNDLE" ]]; then
+    [[ -f "$BUNDLE/$src" ]] || { warn "$BUNDLE 里没有 $src"; exit 1; }
+    install -m 755 "$BUNDLE/$src" "$dst"
+  elif [[ -n "$BASE_URL" ]]; then
+    curl -fsSL --max-time 180 "$BASE_URL/$src" -o "$dst.tmp"
+    install -m 755 "$dst.tmp" "$dst"; rm -f "$dst.tmp"
+  else
+    warn "没有二进制来源：加 --bundle DIR 或 --url BASE"; exit 1
+  fi
+}
 
-	if [ "$VERSION" = "latest" ]; then
-		URL="https://github.com/$REPO/releases/latest/download/knock-hub-linux-$ARCH"
-	else
-		URL="https://github.com/$REPO/releases/download/$VERSION/knock-hub-linux-$ARCH"
-	fi
-
-	echo "下载：$URL"
-	TMP="$(mktemp)"
-	# -f 让 404 直接失败，而不是把一段 HTML 装成二进制
-	if ! curl -fsSL "$URL" -o "$TMP"; then
-		echo "下载失败。项目还没发 release 的话，用 --binary 指向本地编译的二进制。" >&2
-		rm -f "$TMP"
-		exit 1
-	fi
-	install -m 0755 "$TMP" "$BIN_PATH"
-	rm -f "$TMP"
-fi
-
-# —— 2. 写配置（已存在就不动）——
+dim "安装组件…"
 mkdir -p "$DATA_DIR"
-chmod 700 "$DATA_DIR"
+fetch_bin knock-hub-linux "$BIN_DIR/knock-hub"
+ok "已安装 $BIN_DIR/knock-hub"
+if (( RELAY )); then
+  fetch_bin iroh-relay "$BIN_DIR/iroh-relay"
+  ok "已安装 $BIN_DIR/iroh-relay"
+fi
 
-CONFIG="$DATA_DIR/node.json"
-if [ ! -f "$CONFIG" ]; then
-	if [ -z "$DOMAIN" ] && [ -z "$IP" ]; then
-		# 没给地址就试着问一下公网 IP；失败也不拦着，让人自己填
-		IP="$(curl -4 -fsS --max-time 5 https://api.ipify.org 2>/dev/null || true)"
-		if [ -z "$IP" ]; then
-			IP="$(curl -6 -fsS --max-time 5 https://api64.ipify.org 2>/dev/null || true)"
-		fi
-		[ -n "$IP" ] && echo "没指定地址，探测到公网 IP：$IP"
-	fi
-
-	cat >"$CONFIG" <<EOF
+cat > "$DATA_DIR/node.json" <<JSON
 {
-  "label": "",
   "public_port": $PORT,
   "domain": "$DOMAIN",
-  "ipv4": "$IP",
+  "ipv4": "$ADDR",
   "ipv6": "",
-  "relay_allowed": $RELAY,
+  "relay_allowed": $([[ $RELAY == 1 ]] && echo true || echo false),
+  "relay_url": "$RELAY_URL",
+  "relay_local": "$RELAY_LOCAL",
+  "allow_plain_relay": $ALLOW_PLAIN,
   "listen": ":$PORT",
   "room_ttl": "10m",
-  "max_rooms": 200
+  "max_rooms": 200,
+  "lookup_per_minute": 30,
+  "create_per_minute": 10,
+  "name": "$NAME"
 }
-EOF
-	chmod 600 "$CONFIG"
-	echo "已写配置：$CONFIG"
-else
-	echo "配置已存在，保持不动：$CONFIG"
-fi
+JSON
+ok "配置写到 $DATA_DIR/node.json"
 
-# —— 3. systemd ——
-if [ -f "$(dirname "$0")/knock-node.service" ]; then
-	install -m 0644 "$(dirname "$0")/knock-node.service" "$UNIT_PATH"
-else
-	# 从管道执行时拿不到同目录文件，内联一份
-	cat >"$UNIT_PATH" <<'EOF'
+if (( RELAY )); then
+  cat > "$RELAY_TOML" <<'TOML'
+# Knock 中继：只听环回，对外由 knock-hub 那一个端口转进来
+enable_relay = true
+http_bind_addr = "127.0.0.1:30991"
+enable_quic_addr_discovery = false
+TOML
+  cat > "$RELAY_UNIT" <<UNIT
 [Unit]
-Description=Knock 节点（房间登记；中继由 iroh-relay 承担）
+Description=Knock relay (iroh-relay, loopback only)
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=/usr/local/bin/knock-hub -data-dir /var/lib/knock
-Restart=on-failure
-RestartSec=3s
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=/var/lib/knock
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectControlGroups=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ExecStart=$BIN_DIR/iroh-relay --dev --config-path $RELAY_TOML
+Restart=always
+RestartSec=3
 
 [Install]
 WantedBy=multi-user.target
-EOF
+UNIT
+fi
+
+cat > "$NODE_UNIT" <<UNIT
+[Unit]
+Description=Knock node (rooms$([[ $RELAY == 1 ]] && echo ' + relay' || true))
+After=network-online.target
+Wants=network-online.target
+$( [[ $RELAY == 1 ]] && echo 'After=knock-relay.service' )
+
+[Service]
+Type=simple
+WorkingDirectory=$DATA_DIR
+ExecStart=$BIN_DIR/knock-hub -config $DATA_DIR/node.json -data-dir $DATA_DIR
+Restart=always
+RestartSec=3
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+
+if [[ -f "$(dirname "$0")/knock" ]]; then
+  install -m 755 "$(dirname "$0")/knock" "$BIN_DIR/knock"
+  ok "已安装管理命令 $BIN_DIR/knock"
 fi
 
 systemctl daemon-reload
-systemctl enable --now knock-node.service
+if (( RELAY )); then systemctl enable --now knock-relay >/dev/null 2>&1 || true; fi
+systemctl enable --now knock-node >/dev/null 2>&1 || true
+sleep 2
 
-# —— 4. 把节点码亮出来 ——
 echo
-if ! "$BIN_PATH" -data-dir "$DATA_DIR" -print-code; then
-	echo "节点码还没生成成功：先把 $CONFIG 里的地址填上，然后" >&2
-	echo "  systemctl restart knock-node && journalctl -u knock-node -n 40" >&2
-	exit 1
+dim "启动服务…"
+systemctl is-active --quiet knock-node || { warn "没起来，看 journalctl -u knock-node -n 30"; exit 1; }
+ok "knock-node.service — active (running)"
+(( RELAY )) && systemctl is-active --quiet knock-relay && ok "knock-relay.service — active (running)  监听 127.0.0.1:30991（只给本机用）"
+
+echo
+dim "—— 这个节点的编码 ——"
+CODE="$("$BIN_DIR/knock-hub" -config "$DATA_DIR/node.json" -data-dir "$DATA_DIR" -print-code 2>/dev/null | tr -d '[:space:]' || true)"
+if [[ -n "$CODE" ]]; then
+  dim "节点码（复制这一整串发给别人）："
+  printf '\n  %s%s%s\n\n' "$C_ACC" "$CODE" "$C_OFF"
+else
+  warn "节点码没打出来：journalctl -u knock-node | grep -A2 节点码"
 fi
-
+warn "记得在云厂商安全组放行 TCP ${PORT}（只需要这一个）"
 echo
-echo "服务状态：systemctl status knock-node"
-echo "看日志：  journalctl -u knock-node -f"
+ok "装好了。以后用 knock 管它（直接输 knock 就是菜单）"
+echo

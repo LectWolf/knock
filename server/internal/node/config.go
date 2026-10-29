@@ -52,6 +52,12 @@ type Config struct {
 	// 有值 = 客户端会把它作为**唯一**的中继，不会回落到别人的公共服务。
 	RelayURL string `json:"relay_url"`
 
+	// RelayLocal 是这台机上 iroh-relay 的**本地**地址（如 127.0.0.1:30991）。
+	//
+	// 有值时，本服务会把 API 之外的路径反向代理给它——
+	// 对外就只要开一个端口（RelayURL 指向本服务自己的地址）。
+	RelayLocal string `json:"relay_local"`
+
 	// AllowPlainRelay 允许 relay_url 用明文 http（默认不允许）。
 	//
 	// 只给自测/内网用：公网上的明文 HTTP 会被中间设备动手脚。正式部署请上 TLS。
