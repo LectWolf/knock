@@ -104,7 +104,7 @@ if (( RELAY )); then
 [tls]
 cert_mode = "Reloading"
 https_bind_addr = "0.0.0.0:${RELAY_PORT}"
-quic_bind_addr = "0.0.0.0:${RELAY_PORT}"
+quic_bind_addr = "0.0.0.0:7842"
 manual_cert_path = "${CERT}"
 manual_key_path = "${KEY}"
 TOML
@@ -118,7 +118,7 @@ cert_mode = "LetsEncrypt"
 hostname = ["${TLS_DOMAIN}"]
 contact = "${LE_EMAIL}"
 https_bind_addr = "0.0.0.0:${RELAY_PORT}"
-quic_bind_addr = "0.0.0.0:${RELAY_PORT}"
+quic_bind_addr = "0.0.0.0:7842"
 TOML
 )
       warn "用 Let's Encrypt 自动签：域名必须已经解析到 $ADDR，且 80 或 443 可达（ACME 验证要用）"
@@ -208,7 +208,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=$BIN_DIR/iroh-relay --dev --config-path $RELAY_TOML
+# 不加 --dev：--dev 会强制忽略 TLS 配置，只跑明文 http
+ExecStart=$BIN_DIR/iroh-relay --config-path $RELAY_TOML
 Restart=always
 RestartSec=3
 

@@ -1,0 +1,69 @@
+#!/usr/bin/env bash
+# knock-apply-cert <域名>
+#
+# 节点侧：证书已经放到 /etc/ssl/knock/ 之后，用它把中继切成 TLS + QUIC 地址发现。
+# 幂等：重复跑只是重新写一遍配置并重启中继。
+set -uo pipefail
+DOMAIN="${1:?用法：knock-apply-cert <域名>}"
+CERT=/etc/ssl/knock/fullchain.pem
+PKEY=/etc/ssl/knock/privkey.pem
+CFG=/var/lib/knock/node.json
+TOML=/etc/knock-relay.toml
+ACC=$'\033[38;5;179m'; OK=$'\033[32m'; WARN=$'\033[33m'; OFF=$'\033[0m'
+say_ok() { printf '%s✓%s %s\n' "$OK" "$OFF" "$*"; }
+say_warn() { printf '%s！%s %s\n' "$WARN" "$OFF" "$*"; }
+
+[[ -f "$CERT" && -f "$PKEY" ]] || { say_warn "证书没就位：$CERT / $PKEY"; exit 1; }
+chmod 644 "$CERT"; chmod 600 "$PKEY"
+
+if ! openssl x509 -in "$CERT" -noout -checkhost "$DOMAIN" 2>/dev/null | grep -q "does match"; then
+  say_warn "证书不覆盖 $DOMAIN："
+  openssl x509 -in "$CERT" -noout -ext subjectAltName 2>/dev/null | tail -1
+  exit 1
+fi
+say_ok "证书覆盖 $DOMAIN（到期 $(openssl x509 -in "$CERT" -noout -enddate | cut -d= -f2)）"
+
+PORT="$(sed -n 's/.*"relay_public_port": *"\([0-9]*\)".*/\1/p' "$CFG" 2>/dev/null | head -1)"
+PORT="${PORT:-30991}"
+
+cat > "$TOML" <<TOML
+# Knock 中继 —— TLS 模式（证书到期前换掉文件就自动重载）
+enable_relay = true
+http_bind_addr = "127.0.0.1:30992"
+enable_quic_addr_discovery = true
+enable_metrics = false
+metrics_bind_addr = "127.0.0.1:9090"
+
+[tls]
+cert_mode = "Reloading"
+https_bind_addr = "0.0.0.0:${PORT}"
+# 客户端默认按 7842 找 QUIC（RelayConfig 里没带端口就走这个默认值），
+# 所以打洞辅助固定用 7842/UDP，别跟 https 端口混。
+quic_bind_addr = "0.0.0.0:7842"
+manual_cert_path = "${CERT}"
+manual_key_path = "${PKEY}"
+TOML
+say_ok "中继配置写好（HTTPS ${PORT} · QUIC 7842）"
+
+systemctl restart knock-relay
+sleep 2
+if ! systemctl is-active --quiet knock-relay; then
+  say_warn "中继没起来：journalctl -u knock-relay -n 20"
+  exit 1
+fi
+if curl -fsSk --max-time 5 "https://127.0.0.1:${PORT}/ping" >/dev/null; then
+  say_ok "HTTPS 通了：https://127.0.0.1:${PORT}/ping"
+else
+  say_warn "HTTPS 没通，看看证书链是不是完整的 fullchain"
+  exit 1
+fi
+
+if [[ -f "$CFG" ]]; then
+  sed -i "s|\"relay_url\": *\"[^\"]*\"|\"relay_url\": \"https://${DOMAIN}:${PORT}\"|; s|\"relay_local\": *\"[^\"]*\"|\"relay_local\": \"\"|; s|\"allow_plain_relay\": *true|\"allow_plain_relay\": false|" "$CFG"
+  systemctl restart knock-node
+  sleep 1
+  say_ok "节点配置已更新：https://${DOMAIN}:${PORT}"
+fi
+
+printf '\n%s安全组要放行：TCP %s（中继）+ UDP 7842（打洞）%s\n' "$ACC" "$PORT" "$PORT" "$OFF"
+systemctl is-active knock-node knock-relay | paste -sd' '

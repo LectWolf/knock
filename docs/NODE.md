@@ -101,8 +101,7 @@ sudo /usr/local/bin/knock-hub -data-dir /var/lib/knock -print-code
 
 | 节点 | 地址 | 节点码 | 备注 |
 |---|---|---|---|
-| 香港·荃湾 | `http://154.36.165.162:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继同在机上（`127.0.0.1:30991`，不对外） |
-| 枣庄·14900K | `http://202.189.15.149:19600`（SSH 19508） | `36YS5JNX1YAS0K5XJAJ6MBSEJ12WW` | 国内节点，`/data/knock`，只做信令（未配中继） |
+| 香港·荃湾 | `http://node-tw.mcii.cc:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继 `https://node-tw.mcii.cc:30991`（TLS + QUIC 7842，能帮打洞） |
 
 升级二进制的方式（就地替换，留 `.old` 可回滚）：
 
@@ -134,7 +133,7 @@ ssh -p 19508 root@<主机> 'chmod +x /usr/local/bin/knock-hub.new   && cp /usr/l
 节点对外通告的中继地址写在 `/var/lib/knock/node.json`：
 
 ```json
-"relay_url": "http://154.36.165.162:30991",
+"relay_url": "https://node-tw.mcii.cc:30991",
 "allow_plain_relay": true
 ```
 
@@ -247,3 +246,36 @@ manual_key_path  = "/etc/ssl/knock/privkey.pem"
 **是 IP，不是域名。** 域名只用于**中继**（TLS 证书要域名）。
 打洞成功意味着两端找到了一条直连路径，客户端拿到的是对端的 `IP:端口` 候选地址，
 这时域名完全没参与——所以改域名、换证书都不会影响已经直连上的会话。
+
+## 用 1Panel 的证书给节点上 TLS（2026-10-29 实测）
+
+节点侧脚本 `/usr/local/bin/knock-apply-cert <域名>`（仓库 `deploy/knock-apply-cert`）：
+校验证书是否覆盖该域名 → 写 `[tls]` 配置（`Reloading`）→ 重启中继 → 校验 HTTPS → 改 `node.json` 的 `relay_url`。
+
+1Panel 的「申请证书之后执行脚本」填 `deploy/1panel-cert-hook.sh` 的内容：
+
+```bash
+DOMAIN="node-tw.mcii.cc"        # 证书要覆盖的名字
+NODE_HOST="154.36.165.162"      # 节点公网地址
+NODE_PORT=19508                 # 节点 SSH 端口
+SSH_KEY=/root/.ssh/knock-node-tw
+```
+
+要点：
+
+- 1Panel 执行脚本时**工作目录就是证书推送目录**，证书是 `./fullchain.pem` / `./privkey.pem`
+- 面板机器上要有一把能登录节点的密钥（`ssh-keygen -t ed25519 -f /root/.ssh/knock-node-tw`，公钥加到节点）
+- 证书续期后脚本再跑一次，中继会因 `Reloading` 自动加载新证书
+- **QUIC 端口固定 7842**：客户端拿到的 `RelayConfig` 不带端口时默认按 7842 找地址发现，
+  所以 `quic_bind_addr` 必须是 7842，别跟着 https 端口走
+- 安全组：`TCP 30991`（中继）+ `UDP 7842`（打洞）
+
+验证：
+
+```console
+# curl -s https://node-tw.mcii.cc:30991/ping          → 200（证书有效，不带 -k）
+# curl -s http://node-tw.mcii.cc:30990/healthz | grep relay_url
+"relay_url":"https://node-tw.mcii.cc:30991"
+# ss -tlnp | grep 30991   → iroh-relay
+# ss -ulnp | grep 7842    → iroh-relay
+```
