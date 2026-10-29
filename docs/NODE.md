@@ -127,3 +127,19 @@ ssh -p 19508 root@<主机> 'chmod +x /usr/local/bin/knock-hub.new   && cp /usr/l
 - **不主动外连任何目标**。只处理「两端都持有有效凭据」的转发请求，所以它不是开放代理。
 - 不接 TUN、不做网段、不代理任意 UDP。
 - 不收集账号，不记聊天内容，也没有计费。
+
+## 中继对外开放（2026-10-30 上线）
+
+节点对外通告的中继地址写在 `/var/lib/knock/node.json`：
+
+```json
+"relay_url": "http://154.36.165.162:30991",
+"allow_plain_relay": true
+```
+
+- `iroh-relay` 必须监听 `0.0.0.0:30991`（`/etc/knock-relay.toml` 的 `http_bind_addr`），
+  且云厂商安全组要放行 **TCP 30991**——只开 30990 的话，客户端拿到的中继地址是不可达的。
+- 明文 http 中继要 `allow_plain_relay: true` 才会被接受；**正式部署请上 TLS**（443 + 证书），
+  iroh 流量本身端到端加密，中继只看到密文，但明文端口不合规也容易被中间设备干扰。
+- 验证：从外网 `curl http://<节点IP>:30991/` 应返回 200；端到端测试
+  `KNOCK_RELAY_URL=http://<节点IP>:30991 cargo test --test transport_e2e a_failed_punch -- --ignored` 应绿。

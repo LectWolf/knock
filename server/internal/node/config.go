@@ -52,6 +52,11 @@ type Config struct {
 	// 有值 = 客户端会把它作为**唯一**的中继，不会回落到别人的公共服务。
 	RelayURL string `json:"relay_url"`
 
+	// AllowPlainRelay 允许 relay_url 用明文 http（默认不允许）。
+	//
+	// 只给自测/内网用：公网上的明文 HTTP 会被中间设备动手脚。正式部署请上 TLS。
+	AllowPlainRelay bool `json:"allow_plain_relay"`
+
 	// Listen 是 HTTP API 的监听地址。
 	Listen string `json:"listen"`
 
@@ -145,7 +150,10 @@ func (c Config) validateRelayURL() error {
 		if isLoopbackHost(u.Hostname()) {
 			return nil // 本机调试允许明文
 		}
-		return errors.New("relay_url 必须用 https：公网上的明文 HTTP 会被中间设备拦截甚至替换")
+		if !c.AllowPlainRelay {
+			return errors.New("relay_url 必须用 https：公网上的明文 HTTP 会被中间设备拦截甚至替换（自测可设 allow_plain_relay=true）")
+		}
+		return nil
 	default:
 		return fmt.Errorf("relay_url 的协议 %q 不认识，只支持 https（本机可 http）", u.Scheme)
 	}

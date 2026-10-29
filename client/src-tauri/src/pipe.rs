@@ -69,11 +69,14 @@ pub fn relay_mode(relay_url: Option<&str>) -> io::Result<RelayMode> {
             format!("中继地址 {raw} 不是 http(s) 地址"),
         ));
     }
+    // 明文 http 的中继：只告警，不拒绝。
+    //
+    // 这个地址是**从我们已经在用的节点**拿到的，而节点 API 本身就是 http（30990）——
+    // 对中继比对节点更严格没有意义，同一个信任边界。
+    // 更何况 iroh 的流量是端到端加密的，中继看到的只是密文。
+    // 正式部署仍建议上 https。
     if raw.starts_with("http://") && !is_loopback_url(raw) {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "中继地址必须用 https：公网上的明文 HTTP 会被中间设备拦截甚至替换".to_string(),
-        ));
+        eprintln!("注意：中继用的是明文 http（{raw}），建议给节点配 TLS");
     }
 
     let map = RelayMap::try_from_iter([raw]).map_err(|e| {
