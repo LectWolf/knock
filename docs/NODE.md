@@ -249,31 +249,35 @@ manual_key_path  = "/etc/ssl/knock/privkey.pem"
 
 ## 用 1Panel 的证书给节点上 TLS（2026-10-29 实测）
 
-节点侧脚本 `/usr/local/bin/knock-apply-cert <域名>`（仓库 `deploy/knock-apply-cert`）：
-校验证书是否覆盖该域名 → 写 `[tls]` 配置（`Reloading`）→ 重启中继 → 校验 HTTPS → 改 `node.json` 的 `relay_url`。
+前提：**面板和节点是同一台机**（比如香港·荃湾 154.36.165.162，它自己就装了 1Panel，
+证书来自 `/opt/1panel/www/sites/*/ssl/`，是 `*.mcii.cc` 泛域名）。
 
-1Panel 的「申请证书之后执行脚本」填 `deploy/1panel-cert-hook.sh` 的内容：
+两步：
+
+1. 节点侧装一个应用脚本 `deploy/knock-apply-cert` → `/usr/local/bin/knock-apply-cert`。
+   它做：校验证书覆盖域名 → 写 `[tls]`（`cert_mode = "Reloading"`）→ 重启中继 → 校验 HTTPS →
+   把 `node.json` 的 `relay_url` 改成 `https://<域名>:30991`。
+2. 1Panel 证书页勾「申请证书之后执行脚本」，填 `deploy/1panel-cert-hook.sh` 的内容：
 
 ```bash
-DOMAIN="node-tw.mcii.cc"        # 证书要覆盖的名字
-NODE_HOST="154.36.165.162"      # 节点公网地址
-NODE_PORT=19508                 # 节点 SSH 端口
-SSH_KEY=/root/.ssh/knock-node-tw
+DOMAIN="node-tw.mcii.cc"     # 证书要覆盖的名字
+DST=/etc/ssl/knock
 ```
 
 要点：
 
-- 1Panel 执行脚本时**工作目录就是证书推送目录**，证书是 `./fullchain.pem` / `./privkey.pem`
-- 面板机器上要有一把能登录节点的密钥（`ssh-keygen -t ed25519 -f /root/.ssh/knock-node-tw`，公钥加到节点）
-- 证书续期后脚本再跑一次，中继会因 `Reloading` 自动加载新证书
-- **QUIC 端口固定 7842**：客户端拿到的 `RelayConfig` 不带端口时默认按 7842 找地址发现，
+- 1Panel 执行时**工作目录就是证书推送目录**，证书是 `./fullchain.pem` / `./privkey.pem`
+- 脚本里不用 SSH：同一台机，`install -m644` 复制过去就行
+- 续期后脚本再跑一次，`Reloading` 会自动加载新证书，不重启也不掉线
+- **QUIC 固定 7842**：客户端拿到的 `RelayConfig` 不带端口时默认按 7842 找地址发现，
   所以 `quic_bind_addr` 必须是 7842，别跟着 https 端口走
+- iroh-relay 的 systemd unit **不能带 `--dev`**，`--dev` 会强制忽略 TLS 配置（踩过）
 - 安全组：`TCP 30991`（中继）+ `UDP 7842`（打洞）
 
 验证：
 
 ```console
-# curl -s https://node-tw.mcii.cc:30991/ping          → 200（证书有效，不带 -k）
+# curl -s https://node-tw.mcii.cc:30991/ping          → 200（不带 -k，证书有效）
 # curl -s http://node-tw.mcii.cc:30990/healthz | grep relay_url
 "relay_url":"https://node-tw.mcii.cc:30991"
 # ss -tlnp | grep 30991   → iroh-relay
