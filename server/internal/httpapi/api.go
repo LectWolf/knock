@@ -300,6 +300,9 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 		"lookup_limit":  a.lookup.Limit(),
 		"create_limit":  a.create.Limit(),
 		"lookup_bucket": a.lookup.Len(),
+		// 节点体检用：客户端靠这两项判断"能不能绕路"
+		"relay_url":     a.relayURL,
+		"relay_allowed": a.relayURL != "",
 	})
 }
 

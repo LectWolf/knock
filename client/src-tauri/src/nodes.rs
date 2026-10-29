@@ -9,6 +9,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
+use crate::room::{Proto, SUPPORTED_API, SUPPORTED_TRANSPORT};
+
 use crate::invite::NodeCode;
 
 /// 列表放哪。改这里等于改"大家从哪儿认识新节点"，是有公关后果的，别乱改。
@@ -21,6 +23,18 @@ pub const LIST_URL: &str =
 /// 备选：API 挂了的时候再试这条（能通说明网络环境不需要 API）。
 pub const MIRROR_URL: &str =
     "https://raw.githubusercontent.com/LectWolf/knock/master/nodes/public.json";
+
+/// 所有可用源，按"通常最快/最不容易被墙"排。刷新时挨个试，谁先回谁赢。
+///
+/// 国内网络下 api.github.com 和 raw.githubusercontent.com 都经常连不上，
+/// 所以带上 jsDelivr（CDN）和 ghproxy 这类镜像——这不是"多此一举"，
+/// 是没有它们时刷新会直接失败。
+pub const SOURCES: &[(&str, &str)] = &[
+    ("GitHub API", LIST_URL),
+    ("jsDelivr", "https://cdn.jsdelivr.net/gh/LectWolf/knock@master/nodes/public.json"),
+    ("ghproxy", "https://ghproxy.net/https://raw.githubusercontent.com/LectWolf/knock/master/nodes/public.json"),
+    ("raw", MIRROR_URL),
+];
 
 /// 缓存多久算馊了。节点会下线，列表太旧等于骗人。
 pub const MAX_AGE: Duration = Duration::from_secs(7 * 24 * 3600);
@@ -112,11 +126,92 @@ pub fn fetch(url: &str) -> Result<List, String> {
 }
 
 /// 先走 API，不通再走 raw。两条都不通才报错，错误里说清楚两条都试过了。
+/// 挨个源试一遍，用最先回来的那份。
 pub fn fetch_any() -> Result<List, String> {
-    match fetch(LIST_URL) {
-        Ok(list) => Ok(list),
-        Err(first) => fetch(MIRROR_URL).map_err(|second| format!("{first}；备用地址也不行：{second}")),
+    fetch_with_source().map(|(list, _)| list)
+}
+
+/// 同上，但把"哪条源给的"也带出来，界面上可以显示（出问题时能一眼看出是镜像给的旧表）。
+pub fn fetch_with_source() -> Result<(List, String), String> {
+    let mut errors = Vec::new();
+    for (name, url) in SOURCES {
+        match fetch(url) {
+            Ok(list) => return Ok((list, (*name).to_string())),
+            Err(e) => errors.push(format!("{name}: {e}")),
+        }
     }
+    Err(format!("所有源都不行——{}", errors.join("；")))
+}
+
+/// 一个节点的体检结果：通不通、多快、支不支持中继。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Probe {
+    pub url: String,
+    /// 往返毫秒；None = 没通
+    pub ms: Option<u64>,
+    /// 这个节点跑没跑中继
+    pub relay: bool,
+    /// 节点自报的名字
+    pub name: String,
+    /// 协议对不对得上（对不上等于用不了，界面要说清楚）
+    pub proto_ok: bool,
+    /// 不通时的原因
+    pub error: String,
+}
+
+/// 摸一下某个节点：打 /healthz，量个往返。
+pub fn probe(url: &str) -> Probe {
+    let mut out = Probe {
+        url: url.to_string(),
+        ms: None,
+        relay: false,
+        name: String::new(),
+        proto_ok: false,
+        error: String::new(),
+    };
+    let started = std::time::Instant::now();
+    let endpoint = format!("{}/healthz", url.trim_end_matches('/'));
+    let resp = attohttpc::get(&endpoint)
+        .timeout(std::time::Duration::from_secs(3))
+        .send();
+    match resp {
+        Ok(r) if r.status().is_success() => {
+            out.ms = Some(started.elapsed().as_millis() as u64);
+            match r.text() {
+                Ok(body) => {
+                    #[derive(Deserialize)]
+                    struct Health {
+                        #[serde(default)]
+                        name: String,
+                        #[serde(default)]
+                        relay_url: String,
+                        #[serde(default)]
+                        relay_allowed: bool,
+                        #[serde(default)]
+                        proto: Option<Proto>,
+                    }
+                    match serde_json::from_str::<Health>(&body) {
+                        Ok(h) => {
+                            out.name = h.name;
+                            out.relay = h.relay_allowed && !h.relay_url.is_empty();
+                            out.proto_ok = h
+                                .proto
+                                .map(|p| p.api == SUPPORTED_API && p.transport == SUPPORTED_TRANSPORT)
+                                .unwrap_or(false);
+                            if !out.proto_ok {
+                                out.error = "版本对不上".into();
+                            }
+                        }
+                        Err(e) => out.error = format!("返回看不懂：{e}"),
+                    }
+                }
+                Err(e) => out.error = format!("读不了响应：{e}"),
+            }
+        }
+        Ok(r) => out.error = format!("HTTP {}", r.status()),
+        Err(e) => out.error = format!("连不上：{e}"),
+    }
+    out
 }
 
 pub fn parse(text: &str) -> Result<List, String> {
@@ -196,5 +291,34 @@ mod tests {
         let back = cached(&dir).expect("存了就该读得到");
         assert_eq!(back.nodes.len(), 1);
         assert_eq!(back.nodes[0].label, "0TPF");
+    }
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::*;
+
+    /// 摸真节点：这条要能说出延迟、中继、协议三件事。
+    #[test]
+    #[ignore]
+    fn the_real_node_answers_the_probe() {
+        let url = std::env::var("KNOCK_NODE_URL")
+            .unwrap_or_else(|_| "http://154.36.165.162:30990".to_string());
+        let p = probe(&url);
+        println!("{p:?}");
+        assert!(p.ms.is_some(), "节点应该通：{:?}", p.error);
+        assert!(p.proto_ok, "协议应当对得上");
+        assert!(p.relay, "这台节点是带中继的");
+        let ms = p.ms.unwrap();
+        assert!(ms < 2000, "延迟离谱：{ms} ms");
+    }
+
+    /// 不通的地址要老实说"连不上"，而不是装成功。
+    #[test]
+    #[ignore]
+    fn a_dead_address_is_reported_as_dead() {
+        let p = probe("http://127.0.0.1:1");
+        assert!(p.ms.is_none());
+        assert!(!p.error.is_empty());
     }
 }

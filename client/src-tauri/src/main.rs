@@ -142,8 +142,12 @@ fn nodes_cached(app: AppHandle) -> Option<knock::nodes::List> {
 
 /// 去 GitHub 重新拉一份。拉不到就把人话原样带回界面。
 #[tauri::command]
-fn nodes_refresh(app: AppHandle) -> Result<knock::nodes::List, String> {
-    let list = knock::nodes::fetch_any()?;
+async fn nodes_refresh(app: AppHandle) -> Result<knock::nodes::List, String> {
+    // 拉列表要发网络请求，**绝不能**在主线程上同步做——那会把界面卡死（之前就是这样）
+    let (list, source) = tauri::async_runtime::spawn_blocking(knock::nodes::fetch_with_source)
+        .await
+        .map_err(|e| format!("拉列表失败：{e}"))??;
+    let _ = source;
     let dir = config_dir(&app);
     // 存不下不算失败：这次已经能用上了
     let _ = knock::nodes::save(&dir, &list);
@@ -160,6 +164,18 @@ fn entry_addr(st: State<'_, App>) -> Option<String> {
         .as_ref()
         .and_then(|t| t.local_addr())
         .map(|a| a.to_string())
+}
+
+/// 逐个摸节点的延迟和"支不支持中继"。同样放到后台线程，界面不卡。
+#[tauri::command]
+async fn nodes_probe(urls: Vec<String>) -> Vec<knock::nodes::Probe> {
+    tauri::async_runtime::spawn_blocking(move || {
+        urls.into_iter()
+            .map(|u| knock::nodes::probe(&u))
+            .collect::<Vec<_>>()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 /// 把一串节点编码解析成能用的地址。自定义节点就靠它。
@@ -297,6 +313,7 @@ fn main() {
             entry_addr,
             nodes_cached,
             nodes_refresh,
+            nodes_probe,
             node_url_from_code,
             guests,
             kick,

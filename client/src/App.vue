@@ -184,7 +184,15 @@ onMounted(async () => {
 const showSettings = ref(params.get("panel") === "settings");
 
 /* 节点列表：不内置，从仓库里拉一次并缓存 */
-const nodeList = ref<any[]>([]);
+const nodeList = ref<any[]>(
+  params.get("demo") === "nodes"
+    ? [
+        { code: "hk", label: "香港·荃湾", name: "香港·荃湾", url: "http://154.36.165.162:30990", relay: true, note: "项目自测节点" },
+        { code: "jp", label: "日本·东京", name: "日本·东京", url: "http://example.invalid:30990", relay: false, note: "只做信令" },
+        { code: "us", label: "美国·芝加哥", name: "美国·芝加哥", url: "http://example2.invalid:30990", relay: true, note: "" },
+      ]
+    : [],
+);
 const nodesBusy = ref(false);
 const nodesError = ref("");
 
@@ -201,6 +209,7 @@ const refreshNodes = async () => {
   try {
     const l = await invoke("nodes_refresh");
     nodeList.value = l.nodes ?? [];
+    void probeAll();
     if (!nodeList.value.length) nodesError.value = "列表是空的";
   } catch (e: any) {
     nodesError.value = typeof e === "string" ? e : "拉不到列表，检查网络";
@@ -215,6 +224,48 @@ const customCode = ref("");
 const nodeWarn = ref("");
 const pendingNode = ref<any | null>(null);
 const nodeName = ref(params.get("node_name") ?? "");
+/* 节点体检结果：延迟、有没有中继、版本对不对 */
+const probes = ref<Record<string, any>>(
+  params.get("demo") === "nodes"
+    ? {
+        "http://154.36.165.162:30990": { url: "http://154.36.165.162:30990", ms: 38, relay: true, proto_ok: true, error: "" },
+        "http://example.invalid:30990": { url: "http://example.invalid:30990", ms: 156, relay: false, proto_ok: true, error: "" },
+        "http://example2.invalid:30990": { url: "http://example2.invalid:30990", ms: 620, relay: true, proto_ok: true, error: "" },
+      }
+    : {},
+);
+const probing = ref(false);
+
+const probeAll = async () => {
+  if (!invoke || !nodeList.value.length) return;
+  probing.value = true;
+  try {
+    const urls = nodeList.value.map((n: any) => n.url).filter(Boolean);
+    const res = await invoke("nodes_probe", { urls });
+    const next: Record<string, any> = {};
+    for (const p of (res as any[]) ?? []) next[p.url] = p;
+    probes.value = next;
+  } finally {
+    probing.value = false;
+  }
+};
+
+const pingOf = (url: string) => probes.value[url];
+const pingLabel = (url: string) => {
+  const p = pingOf(url);
+  if (!p) return "测速中…";
+  if (!p.proto_ok) return p.error === "版本对不上" ? "版本对不上" : "不通";
+  return p.ms != null ? p.ms + " ms" : "超时";
+};
+const pingClass = (url: string) => {
+  const p = pingOf(url);
+  if (!p) return "ping-wait";
+  if (!p.proto_ok || p.ms == null) return "ping-bad";
+  if (p.ms < 150) return "ping-good";
+  if (p.ms < 450) return "ping-ok";
+  return "ping-slow";
+};
+const relayOf = (url: string) => pingOf(url)?.relay === true;
 
 const filteredNodes = computed(() => {
   const q = nodeQuery.value.trim().toLowerCase();
@@ -237,6 +288,7 @@ const openNodes = () => {
   showNodes.value = true;
   nodeWarn.value = "";
   if (!nodeList.value.length) void loadNodes();
+  else void probeAll();
 };
 
 const closeNodes = () => {
@@ -487,6 +539,14 @@ const open = async () => {
 const retry = () => {
   state.value = "idle";
 };
+
+/* 失败后不只有"再试一次"：也可以退回门口重新想想到底要敲门还是开门 */
+const back = async () => {
+  input.value = "";
+  mode.value = "none";
+  state.value = "idle";
+  if (invoke) await invoke("close_door").catch(() => {});
+};
 </script>
 
 <template>
@@ -551,10 +611,17 @@ const retry = () => {
             <span class="node-main">
               <span class="node-name">{{ n.name || n.label }}</span>
               <span class="node-sub">
-                {{ n.relay ? "能绕路" : "只做信令" }}<template v-if="n.note"> · {{ n.note }}</template>
+                {{ relayOf(n.url) ? "能绕路" : "只做信令" }}<template
+                  v-if="n.note && n.note !== (relayOf(n.url) ? '能绕路' : '只做信令')"
+                >
+                  · {{ n.note }}</template
+                >
               </span>
             </span>
-            <span class="node-pick">{{ nodeAddr === n.url ? "当前" : "选它" }}</span>
+            <span class="node-meta">
+              <span class="ping" :class="pingClass(n.url)">{{ pingLabel(n.url) }}</span>
+              <span class="node-pick">{{ nodeAddr === n.url ? "当前" : "选它" }}</span>
+            </span>
           </button>
           <p v-if="!filteredNodes.length" class="note">
             {{ nodeQuery ? "没有匹配的节点。" : "列表还没拉过。点下面的「刷新列表」。" }}
@@ -565,7 +632,9 @@ const retry = () => {
           <button class="ghost tiny" type="button" :disabled="nodesBusy" @click="refreshNodes">
             {{ nodesBusy ? "刷新中…" : "刷新列表" }}
           </button>
-          <span class="note">{{ nodeList.length ? nodeList.length + " 个节点" : "" }}</span>
+          <span class="note">
+            {{ nodeList.length ? nodeList.length + " 个节点" : "" }}{{ probing ? " · 正在测速" : "" }}
+          </span>
         </div>
 
         <div class="custom">
@@ -803,7 +872,10 @@ const retry = () => {
         <div class="badge err" aria-hidden="true"><span class="badge-dot"></span>没敲开</div>
         <h1 class="title">{{ status.label }}</h1>
         <p class="lede">{{ status.hint }}</p>
-        <button class="primary" type="button" @click="retry">再试一次</button>
+        <div class="actions">
+          <button class="primary" type="button" @click="retry">再试一次</button>
+          <button class="ghost" type="button" @click="back">回到门口</button>
+        </div>
       </template>
       </div>
       </Transition>
@@ -1471,12 +1543,90 @@ textarea {
   flex: 1;
   min-width: 0;
 }
+.node-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ping {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ping-good {
+  color: #79b87f;
+  border-color: rgba(121, 184, 127, 0.35);
+}
+.ping-ok {
+  color: #c9b06a;
+  border-color: rgba(201, 176, 106, 0.35);
+}
+.ping-slow {
+  color: #cf8a5c;
+  border-color: rgba(207, 138, 92, 0.35);
+}
+.ping-bad {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.ping-wait {
+  opacity: 0.5;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
 .node-pick {
   font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
 }
-.node-card.on .node-pick {
+.node-card.on .node-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ping {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.ping-good {
+  color: #79b87f;
+  border-color: rgba(121, 184, 127, 0.35);
+}
+.ping-ok {
+  color: #c9b06a;
+  border-color: rgba(201, 176, 106, 0.35);
+}
+.ping-slow {
+  color: #cf8a5c;
+  border-color: rgba(207, 138, 92, 0.35);
+}
+.ping-bad {
+  color: var(--muted);
+  opacity: 0.7;
+}
+.ping-wait {
+  opacity: 0.5;
+}
+.actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 20px;
+}
+.node-pick {
   color: var(--accent);
 }
 .custom {
