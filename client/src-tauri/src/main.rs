@@ -216,10 +216,7 @@ fn door_code(app: AppHandle, st: State<'_, App>) -> Option<String> {
         .as_ref()
         .and_then(|t| t.room_code())?;
     let s = settings::load(&config_dir(&app));
-    match knock::invite::NodeCode::decode(s.node_code.trim()) {
-        Ok(node) => knock::invite::Invite::full(&node, &room).ok().or(Some(room)),
-        Err(_) => Some(room),
-    }
+    Some(knock::invite::door_label(&s.node_code, &room))
 }
 
 #[tauri::command]

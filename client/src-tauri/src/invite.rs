@@ -275,6 +275,17 @@ impl Invite {
     }
 }
 
+/// 房主该发给朋友的那一串。
+///
+/// 门牌号就是完整邀请；节点码解析不出来时退回 6 位房间码——
+/// 宁可给一串短的（对方得自己加节点），也别给一串错的。
+pub fn door_label(node_code: &str, room: &str) -> String {
+    match NodeCode::decode(node_code.trim()) {
+        Ok(node) => Invite::full(&node, room).unwrap_or_else(|_| normalize_room(room)),
+        Err(_) => normalize_room(room),
+    }
+}
+
 impl std::fmt::Display for Invite {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -448,5 +459,31 @@ impl<'a> Cursor<'a> {
         let slice = &self.buf[self.pos..self.pos + n];
         self.pos += n;
         Ok(slice)
+    }
+}
+
+#[cfg(test)]
+mod door_label_tests {
+    use super::*;
+
+    /// 门牌号必须自带节点：这一串发过去，对方不查节点列表也能敲。
+    #[test]
+    fn the_door_label_carries_the_node() {
+        let code = "36YS5JNX1YAS0K5XJAJ6MBSEJ12WW";
+        let node = NodeCode::decode(code).expect("节点码");
+        let label = door_label(code, "h354jk");
+        assert_eq!(label, Invite::full(&node, "H354JK").unwrap());
+        assert!(label.contains('.'));
+        match Invite::parse(&label).unwrap() {
+            Invite::Full { room, .. } => assert_eq!(room, "H354JK"),
+            other => panic!("应当解析成完整邀请，实际 {other:?}"),
+        }
+    }
+
+    /// 没有节点码时退回房间码：宁可短，也别给一串解析不出来的。
+    #[test]
+    fn without_a_node_code_the_label_stays_short() {
+        assert_eq!(door_label("", "h354jk"), "H354JK");
+        assert_eq!(door_label("不是码", "H354JK"), "H354JK");
     }
 }

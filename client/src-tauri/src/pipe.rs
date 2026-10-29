@@ -466,11 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn public_plain_http_is_rejected() {
-        // 明文会被中间设备改写，地址一换就表现为"门打不开"
-        let err = relay_mode(Some("http://relay.example.com")).unwrap_err();
-        assert_eq!(err.kind(), io::ErrorKind::InvalidInput);
-        assert!(err.to_string().contains("https"));
+    fn public_plain_http_is_accepted_with_a_warning() {
+        // 中继地址是从**我们已经在用的节点**拿到的，而节点 API 本身就是 http——
+        // 对中继比对节点更严格没有意义。iroh 流量端到端加密，中继只看到密文。
+        // 所以这里允许，只在 stderr 提醒一句（正式部署仍建议上 TLS）。
+        let mode = relay_mode(Some("http://relay.example.com")).expect("明文中继应当可用");
+        assert_eq!(relay_urls(&mode).len(), 1);
     }
 
     #[test]
