@@ -23,6 +23,7 @@ warn() { printf '%s！%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
 dim()  { printf '%s%s%s\n' "$C_MUT" "$*" "$C_OFF"; }
 
 NAME=""; ADDR=""; PORT=""; DOMAIN=""; RELAY=""; BUNDLE=""; BASE_URL=""; YES=0
+RELAY_PORT=""; TLS_DOMAIN=""; CERT=""; KEY=""; LE_EMAIL=""; SPLIT=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --name) NAME="$2"; shift 2;;
@@ -35,6 +36,12 @@ while [[ $# -gt 0 ]]; do
     --url) BASE_URL="$2"; shift 2;;
     --binary) BUNDLE="$(dirname "$2")"; shift 2;;
     --data-dir) DATA_DIR="$2"; shift 2;;
+    --relay-port) RELAY_PORT="$2"; shift 2;;
+    --tls-domain) TLS_DOMAIN="$2"; shift 2;;
+    --cert) CERT="$2"; shift 2;;
+    --key) KEY="$2"; shift 2;;
+    --le-email) LE_EMAIL="$2"; shift 2;;
+    --split) SPLIT=1; shift;;
     --yes|-y) YES=1; shift;;
     -h|--help) sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0;;
     *) warn "不认识的参数：$1"; exit 2;;
@@ -80,15 +87,51 @@ fi
 [[ "$ADDR" =~ ^[A-Za-z0-9.:\ -]+$ ]] || { warn "地址不对：$ADDR"; exit 1; }
 [[ "$PORT" =~ ^[0-9]+$ ]] && (( PORT > 0 && PORT < 65536 )) || { warn "端口不对：$PORT"; exit 1; }
 
-SCHEME=http; RELAY_URL=""; ALLOW_PLAIN=false; RELAY_LOCAL=""
+SCHEME=http; RELAY_URL=""; ALLOW_PLAIN=false; RELAY_LOCAL=""; RELAY_PUBLIC_PORT="$PORT"
+TLS_BLOCK=""; QAD=false
 if (( RELAY )); then
-  if [[ -n "$DOMAIN" ]]; then SCHEME=https
+  # 拆分模式：中继自己占一个端口。给了证书就带 TLS + 打开 QUIC 地址发现（能帮打洞），
+  # 没给证书就是明文中继（只转发流量，不帮打洞）。
+  if [[ -n "$TLS_DOMAIN" || -n "$CERT" ]]; then SPLIT=1; fi
+  if (( SPLIT )); then
+    [[ -n "$RELAY_PORT" ]] || RELAY_PORT="$(ask "中继单独用哪个端口？" "30991")"
+    RELAY_PUBLIC_PORT="$RELAY_PORT"
+    if [[ -n "$CERT" && -n "$KEY" ]]; then
+      [[ -f "$CERT" && -f "$KEY" ]] || { warn "证书/私钥文件不存在：$CERT / $KEY"; exit 1; }
+      [[ -n "$TLS_DOMAIN" ]] || { warn "带证书时必须给 --tls-domain（证书上的域名）"; exit 1; }
+      SCHEME=https; QAD=true
+      TLS_BLOCK=$(cat <<TOML
+[tls]
+cert_mode = "Manual"
+https_bind_addr = "0.0.0.0:${RELAY_PORT}"
+quic_bind_addr = "0.0.0.0:${RELAY_PORT}"
+manual_cert_path = "${CERT}"
+manual_key_path = "${KEY}"
+TOML
+)
+      ok "中继走 TLS（$TLS_DOMAIN:$RELAY_PORT），QUIC 地址发现开着——能帮打洞"
+    elif [[ -n "$LE_EMAIL" && -n "$TLS_DOMAIN" ]]; then
+      SCHEME=https; QAD=true
+      TLS_BLOCK=$(cat <<TOML
+[tls]
+cert_mode = "LetsEncrypt"
+hostname = ["${TLS_DOMAIN}"]
+contact = "${LE_EMAIL}"
+https_bind_addr = "0.0.0.0:${RELAY_PORT}"
+quic_bind_addr = "0.0.0.0:${RELAY_PORT}"
+TOML
+)
+      warn "用 Let's Encrypt 自动签：域名必须已经解析到 $ADDR，且 80 或 443 可达（ACME 验证要用）"
+    else
+      warn "拆分模式但没给证书：明文中继，只能转发、不帮打洞（要给证书才开 QAD）"
+    fi
+    RELAY_URL="$SCHEME://${TLS_DOMAIN:-$ADDR}:${RELAY_PORT}"
   else
     dim "  好，中继和房间服务共用 $PORT 这一个端口（明文 http；要 https 用 --domain 配反代证书）"
     ALLOW_PLAIN=true
+    RELAY_URL="http://$ADDR:$PORT"
+    RELAY_LOCAL=127.0.0.1:30991
   fi
-  RELAY_URL="$SCHEME://$ADDR:$PORT"
-  RELAY_LOCAL=127.0.0.1:30991
 fi
 echo
 
@@ -123,6 +166,7 @@ cat > "$DATA_DIR/node.json" <<JSON
   "relay_allowed": $([[ $RELAY == 1 ]] && echo true || echo false),
   "relay_url": "$RELAY_URL",
   "relay_local": "$RELAY_LOCAL",
+  "relay_public_port": "$RELAY_PUBLIC_PORT",
   "allow_plain_relay": $ALLOW_PLAIN,
   "listen": ":$PORT",
   "room_ttl": "10m",
@@ -135,15 +179,27 @@ JSON
 ok "配置写到 $DATA_DIR/node.json"
 
 if (( RELAY )); then
-  cat > "$RELAY_TOML" <<'TOML'
+  if (( SPLIT )); then
+    cat > "$RELAY_TOML" <<TOML
+# Knock 中继：自己占一个端口（拆分模式）
+enable_relay = true
+http_bind_addr = "127.0.0.1:30992"
+enable_quic_addr_discovery = ${QAD}
+enable_metrics = false
+metrics_bind_addr = "127.0.0.1:9090"
+${TLS_BLOCK}
+TOML
+  else
+    cat > "$RELAY_TOML" <<'TOML'
 # Knock 中继：只听环回，对外由 knock-hub 那一个端口转进来
-# 对外只开一个端口——30991、9090 都不需要放行，也不需要写进安全组
+# 对外只开一个端口——30991、9090 都不需要放行
 enable_relay = true
 http_bind_addr = "127.0.0.1:30991"
 enable_quic_addr_discovery = false
 enable_metrics = false
 metrics_bind_addr = "127.0.0.1:9090"
 TOML
+  fi
   cat > "$RELAY_UNIT" <<UNIT
 [Unit]
 Description=Knock relay (iroh-relay, loopback only)
@@ -205,7 +261,12 @@ if [[ -n "$CODE" ]]; then
 else
   warn "节点码没打出来：journalctl -u knock-node | grep -A2 节点码"
 fi
-warn "记得在云厂商安全组放行 TCP ${PORT}（只需要这一个）"
+if (( RELAY )) && (( SPLIT )); then
+  warn "安全组要放行：TCP ${PORT}（房间）+ TCP ${RELAY_PUBLIC_PORT}（中继）"
+  (( QAD )) && warn "再加上 UDP ${RELAY_PUBLIC_PORT}（QUIC 地址发现，帮打洞用的）"
+else
+  warn "记得在云厂商安全组放行 TCP ${PORT}（只需要这一个）"
+fi
 echo
 ok "装好了。以后用 knock 管它（直接输 knock 就是菜单）"
 echo

@@ -166,3 +166,42 @@ LISTEN 0 4096        *:30990          *:*   users:(("knock-hub",...))    ← 唯
 
 - `iroh-relay` 的 `http_bind_addr` 必须是 `127.0.0.1:30991`。写成 `0.0.0.0` 就等于又开了个公网口。
 - `--dev` 模式默认还会起一个指标服务（9090）。配 `enable_metrics = false`，或者把它绑到环回。
+
+## 端口模式与证书（2026-10-30 晚）
+
+### 三种形态
+
+| 形态 | 公网端口 | 能转发流量 | 能帮打洞 | 需要证书 |
+|---|---|---|---|---|
+| 只做信令（无中继） | TCP 1 个 | ✗ | ✗ | ✗ |
+| 单端口（中继走环回 + 反代） | TCP 1 个 | ✓ | ✗ | ✗ |
+| 拆分（中继独立端口） | TCP 2 个 + UDP 1 个 | ✓ | ✓ | 要 |
+
+打洞辅助是 iroh 的 QUIC 地址发现（QAD），它跑在 QUIC 上，而 **QUIC 必须 TLS**——
+所以「帮打洞」和「不装证书」是互斥的，不是我们偷懒。
+
+### TLS 不一定要 443
+
+`iroh-relay` 的 `[tls] https_bind_addr` 可以写任意端口；证书只校验证书上的**域名**，跟端口无关。
+例如 `https://knock.mcii.cc:30991` 完全合法。QUIC 地址发现再占用一个 **UDP** 端口（默认同号或 7842）。
+
+### 证书两条路
+
+1. **Manual**：把 `.crt` / `.key` 路径写进配置（脚本参数 `--cert` / `--key`）。
+   适合复用 1Panel / 宝塔里已有的证书，或者手动 `acme.sh` 签好。
+2. **LetsEncrypt**：配置里 `cert_mode = "LetsEncrypt"` + `hostname` + `contact`，由中继自己签与续期。
+   要求域名已解析到本机，且 **80 或 443 可达**（ACME 验证）。脚本参数 `--le-email`。
+
+### 安装与改端口
+
+```console
+# 拆分模式 + 已有证书
+sudo ./install.sh --name 香港 --addr 1.2.3.4 --port 30990   --relay-port 30991 --tls-domain knock.example.com --cert /etc/ssl/k.crt --key /etc/ssl/k.key
+
+# 后期改端口（房间服务；中继同端口时一起改）
+sudo knock port 30995
+knock status     # 服务 / 门 / 两个端口 / 中继
+knock            # 菜单，其中 6) 改端口
+```
+
+改端口后记得同步云厂商安全组。`knock port` 起不来会自动回滚到旧端口。

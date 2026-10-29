@@ -1,62 +1,107 @@
 #!/usr/bin/env bash
 # knock —— 节点管理命令。不带参数就是菜单。
 #
-#   knock              菜单
-#   knock status       服务状态、房间数、中继
-#   knock code         节点码
-#   knock logs [-f]    日志
-#   knock restart      重启
-#   knock relay on|off 开关数据中转（改配置并重启）
-#   knock uninstall    卸载（问你要不要留配置）
+#   knock                菜单
+#   knock status         服务状态、门、端口、中继
+#   knock code           节点码
+#   knock port 30990     改房间服务端口（中继配置会跟着改）
+#   knock logs [-f]      日志
+#   knock restart        重启
+#   knock relay on|off   开关数据中转
+#   knock uninstall      卸载
 set -uo pipefail
 
 DATA_DIR="${KNOCK_DATA_DIR:-/var/lib/knock}"
 CFG="$DATA_DIR/node.json"
+RELAY_TOML=/etc/knock-relay.toml
 UNIT=knock-node
+BIN=/usr/local/bin/knock-hub
 C_ACC=$'\033[38;5;179m'; C_OK=$'\033[32m'; C_WARN=$'\033[33m'; C_MUT=$'\033[90m'; C_OFF=$'\033[0m'
 ok()   { printf '%s✓%s %s\n' "$C_OK" "$C_OFF" "$*"; }
 warn() { printf '%s！%s %s\n' "$C_WARN" "$C_OFF" "$*"; }
 dim()  { printf '%s%s%s\n' "$C_MUT" "$*" "$C_OFF"; }
 
-json_str() { sed -n 's/.*"'"$1"'": *"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null; }
-json_num() { sed -n 's/.*"'"$1"'": *\([0-9]*\).*/\1/p' "$CFG" 2>/dev/null; }
-
+json_str() { sed -n 's/.*"'"$1"'": *"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null | head -1; }
+json_num() { sed -n 's/.*"'"$1"'": *\([0-9]*\).*/\1/p' "$CFG" 2>/dev/null | head -1; }
 need_root() { [[ ${EUID:-0} -eq 0 ]] || { warn "这个操作要 root：sudo knock …"; exit 1; }; }
 
 status() {
-  local active since name relay port body rooms relay_line
+  local active name rooms port relay relay_port body relay_line
   active="$(systemctl is-active $UNIT 2>/dev/null || true)"
-  since="$(systemctl show -p ActiveEnterTimestamp --value $UNIT 2>/dev/null || true)"
-  name="$(json_str name)"
-  relay="$(json_str relay_url)"
-  port="$(json_num public_port)"
+  name="$(json_str name)"; port="$(json_num public_port)"
+  relay="$(json_str relay_url)"; relay_port="$(json_str relay_public_port)"
   body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
   rooms="$(printf '%s' "$body" | sed -n 's/.*"rooms":\([0-9]*\).*/\1/p')"
-  if [[ -n "$relay" ]]; then relay_line="开 · 与房间服务共用 ${port} 端口"; else relay_line="未开启（只做信令）"; fi
-  printf '  服务    %s%s%s  %s\n' "$C_OK" "$active" "$C_OFF" "${since:+自 $since}"
+  if [[ -n "$relay" ]]; then
+    if [[ "$relay_port" == "$port" || -z "$relay_port" ]]; then
+      relay_line="开 · 与房间服务共用 $port 端口"
+    else
+      relay_line="开 · 单独 $relay_port 端口（$relay）"
+    fi
+  else
+    relay_line="未开启（只做信令）"
+  fi
+  printf '  服务    %s%s%s\n' "$C_OK" "$active" "$C_OFF"
   printf '  节点    %s\n' "${name:-未知}"
   printf '  门      %s 扇开着\n' "${rooms:-?}"
+  printf '  端口    房间 %s%s\n' "$port" "$([[ -n "$relay_port" && "$relay_port" != "$port" ]] && echo " · 中继 $relay_port")"
   printf '  中继    %s\n' "$relay_line"
 }
 
 code() {
   local raw node_code
-  raw="$(/usr/local/bin/knock-hub -config "$CFG" -data-dir "$DATA_DIR" -print-code 2>/dev/null || true)"
+  raw="$($BIN -config "$CFG" -data-dir "$DATA_DIR" -print-code 2>/dev/null || true)"
   node_code="$(printf '%s' "$raw" | grep -oE '[0-9A-HJKMNP-TV-Z]{20,}' | head -1)"
-  if [[ -z "$node_code" ]]; then warn "没拿到节点码：journalctl -u knock-node | grep 节点码"; return; fi
+  if [[ -z "$node_code" ]]; then warn "没拿到节点码：journalctl -u $UNIT | grep 节点码"; return; fi
   printf '\n  %s%s%s\n\n' "$C_ACC" "$node_code" "$C_OFF"
+}
+
+# 改端口：房间服务端口、中继端口、以及两者同端口时的 relay_url 一起改
+set_port() {
+  need_root
+  local want="${1:-}" old new
+  [[ "$want" =~ ^[0-9]+$ ]] && (( want > 0 && want < 65536 )) || { warn "用法：knock port <1-65535>"; return 1; }
+  [[ -f "$CFG" ]] || { warn "找不到 $CFG"; return 1; }
+  old="$(json_num public_port)"
+  new="$want"
+  [[ "$old" == "$new" ]] && { ok "端口本来就是 $new"; return 0; }
+  local relay relay_port
+  relay="$(json_str relay_url)"; relay_port="$(json_str relay_public_port)"
+  sed -i "s/\"public_port\": *[0-9]*/\"public_port\": $new/; s/\"listen\": *\"[^\"]*\"/\"listen\": \":$new\"/" "$CFG"
+  # 同端口模式（中继共用）：relay_url 里的端口也要跟着走
+  if [[ -n "$relay" && ( -z "$relay_port" || "$relay_port" == "$old" ) ]]; then
+    sed -i "s|\"relay_url\": *\"[^\"]*\"|\"relay_url\": \"${relay%:*}:$new\"|; s/\"relay_public_port\": *\"[^\"]*\"/\"relay_public_port\": \"$new\"/" "$CFG"
+  fi
+  systemctl restart $UNIT; sleep 1
+  if systemctl is-active --quiet $UNIT; then
+    ok "端口 $old → $new"
+    warn "别忘了在云厂商安全组放行 TCP $new（旧端口可以关掉）"
+  else
+    warn "没起来：journalctl -u $UNIT -n 30"
+    sed -i "s/\"public_port\": *[0-9]*/\"public_port\": $old/; s/\"listen\": *\"[^\"]*\"/\"listen\": \":$old\"/" "$CFG"
+    systemctl restart $UNIT
+    warn "已回滚到 $old"
+  fi
 }
 
 relay_toggle() {
   need_root
-  [[ -f "$CFG" ]] || { warn "找不到 $CFG"; exit 1; }
-  local want="${1:-}" port addr
+  [[ -f "$CFG" ]] || { warn "找不到 $CFG"; return 1; }
+  local want="${1:-}" port relay_port addr public
   port="$(json_num public_port)"; addr="$(json_str ipv4)"
   case "$want" in
     on)
-      sed -i 's|"relay_url": *"[^"]*"|"relay_url": "http://'"$addr:$port"'"|; s|"relay_local": *"[^"]*"|"relay_local": "127.0.0.1:30991"|; s|"relay_allowed": *false|"relay_allowed": true|; s|"allow_plain_relay": *false|"allow_plain_relay": true|' "$CFG"
+      relay_port="$(json_str relay_public_port)"
+      if [[ -n "$relay_port" && "$relay_port" != "$port" ]]; then
+        # 拆分模式：中继有自己的端口
+        sed -i "s|\"relay_url\": *\"[^\"]*\"|\"relay_url\": \"${SCHEME:-http}://$addr:$relay_port\"|; s|\"relay_local\": *\"[^\"]*\"|\"relay_local\": \"\"|; s|\"relay_allowed\": *false|\"relay_allowed\": true|" "$CFG"
+        ok "中继已开启（单独 $relay_port 端口）"
+      else
+        sed -i "s|\"relay_url\": *\"[^\"]*\"|\"relay_url\": \"http://$addr:$port\"|; s|\"relay_local\": *\"[^\"]*\"|\"relay_local\": \"127.0.0.1:30991\"|; s|\"relay_allowed\": *false|\"relay_allowed\": true|; s|\"allow_plain_relay\": *false|\"allow_plain_relay\": true|" "$CFG"
+        ok "中继已开启（与房间服务共用 $port 端口）"
+      fi
       systemctl enable --now knock-relay >/dev/null 2>&1 || warn "knock-relay 没起来（iroh-relay 装了吗？）"
-      ok "中继已开启（共用 $port）" ;;
+      ;;
     off)
       sed -i 's|"relay_url": *"[^"]*"|"relay_url": ""|; s|"relay_local": *"[^"]*"|"relay_local": ""|; s|"relay_allowed": *true|"relay_allowed": false|' "$CFG"
       systemctl disable --now knock-relay >/dev/null 2>&1 || true
@@ -83,16 +128,17 @@ menu() {
   while true; do
     echo
     printf '%sKnock 节点管理%s\n\n' "$C_ACC" "$C_OFF"
-    printf '  1) 状态\n  2) 节点码\n  3) 日志\n  4) 重启\n  5) 开关中继\n  6) 升级\n  7) 卸载\n  0) 退出\n\n'
-    read -r -p "选一个 [0-7]： " choice
+    printf '  1) 状态\n  2) 节点码\n  3) 日志\n  4) 重启\n  5) 开关中继\n  6) 改端口\n  7) 升级\n  8) 卸载\n  0) 退出\n\n'
+    read -r -p "选一个： " choice
     case "$choice" in
       1) status;;
       2) code;;
       3) journalctl -u $UNIT -n 40 --no-pager;;
       4) need_root && systemctl restart $UNIT && ok "重启了";;
       5) need_root; read -r -p "开还是关？[on/off] " w; relay_toggle "$w";;
-      6) warn "升级请带新二进制重跑 install.sh";;
-      7) uninstall; break;;
+      6) need_root; read -r -p "新的房间服务端口： " p; set_port "$p";;
+      7) warn "升级请带新二进制重跑 install.sh";;
+      8) uninstall; break;;
       0|"") break;;
       *) warn "没有这个选项";;
     esac
@@ -102,6 +148,7 @@ menu() {
 case "${1:-menu}" in
   status) status;;
   code) code;;
+  port) set_port "${2:-}";;
   logs) shift; journalctl -u $UNIT -n 80 --no-pager "$@";;
   restart) need_root && systemctl restart $UNIT && ok "重启了";;
   relay) relay_toggle "${2:-}";;
