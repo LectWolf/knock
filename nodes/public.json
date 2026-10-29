@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updated": "2026-10-28",
+  "updated": "2026-10-29",
   "nodes": [
     {
       "code": "377PN6H4MPH0WYEFD838Q42C674TR",
@@ -9,6 +9,14 @@
       "operator": "project",
       "relay": true,
       "note": "项目自用测试节点，随时可能下线"
+    },
+    {
+      "code": "36YS5JNX1YAS0K5XJAJ6MBSEJ12WW",
+      "label": "14NX",
+      "name": "枣庄·14900K",
+      "operator": "project",
+      "relay": false,
+      "note": "国内节点，只做信令（无中继）"
     }
   ]
 }

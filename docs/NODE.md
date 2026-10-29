@@ -102,6 +102,7 @@ sudo /usr/local/bin/knock-hub -data-dir /var/lib/knock -print-code
 | 节点 | 地址 | 节点码 | 备注 |
 |---|---|---|---|
 | 香港·荃湾 | `http://154.36.165.162:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继同在机上（`127.0.0.1:30991`，不对外） |
+| 枣庄·14900K | `http://202.189.15.149:19600`（SSH 19508） | `36YS5JNX1YAS0K5XJAJ6MBSEJ12WW` | 国内节点，`/data/knock`，只做信令（未配中继） |
 
 升级二进制的方式（就地替换，留 `.old` 可回滚）：
 
