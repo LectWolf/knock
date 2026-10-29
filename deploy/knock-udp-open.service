@@ -1,0 +1,11 @@
+[Unit]
+Description=Knock 放行中继的 UDP 端口
+Before=knock-relay.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/knock-open-udp
+
+[Install]
+WantedBy=multi-user.target

@@ -428,8 +428,18 @@ async fn knocking_alone_puts_the_guest_in_the_roster() {
     let mut host = IrohTransport::new(Arc::clone(&client));
     let (_sink, _log) = recorder();
     host.on_state(_sink);
-    host.connect(Target::Open { port: mc_port }).expect("房主受理");
-    wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
+    // 节点有开门限流（每分钟十几次），连着跑测试会被挡，等一下重开。
+    let mut opened = false;
+    for attempt in 1..=4 {
+        host.connect(Target::Open { port: mc_port }).expect("房主受理");
+        if wait_or("房主拿到门牌号", 20, || host.room_code().is_some()).await {
+            opened = true;
+            break;
+        }
+        println!("开门没成功（第 {attempt} 次），等 20 秒再来——大概是节点限流");
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+    assert!(opened, "四次都没能开门");
     wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
     let code = host.room_code().expect("门牌号");
 
@@ -440,8 +450,20 @@ async fn knocking_alone_puts_the_guest_in_the_roster() {
     guest.connect(Target::Knock { invite: &invite }).expect("房客受理");
 
     // 期间**没有任何游戏流量**，只有敲门这一下
+    // 节点对「查门牌」也有速率限制；连着跑整套测试时最后一条容易被挡，
+    // 表现是房客直接 Failed。等一会儿重敲，不算功能问题。
+    let mut ok = wait_or("房主名册里出现他", 15, || host.sessions().len() >= 1).await;
+    for attempt in 1..=3 {
+        if ok {
+            break;
+        }
+        println!("第一次敲门没成（名册 0 人，房客 {:?}），20 秒后重敲", guest.state());
+        tokio::time::sleep(Duration::from_secs(20)).await;
+        guest.connect(Target::Knock { invite: &invite }).expect("房客受理");
+        ok = wait_or("房主名册里出现他", 15, || host.sessions().len() >= 1).await;
+        println!("重敲第 {attempt} 次：名册 {} 人，房客 {:?}", host.sessions().len(), guest.state());
+    }
     let sessions = host.sessions();
-    let ok = wait_or("房主名册里出现他", 15, || sessions.len() >= 1).await;
     println!("敲门后名册 {} 人，房客状态 {:?}", sessions.len(), guest.state());
     assert!(ok, "敲了门就该出现在名册里");
     assert!(

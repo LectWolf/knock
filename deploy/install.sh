@@ -239,7 +239,29 @@ UNIT
 
 if [[ -f "$(dirname "$0")/knock" ]]; then
   install -m 755 "$(dirname "$0")/knock" "$BIN_DIR/knock"
+  [[ -f "$(dirname "$0")/knock-open-udp" ]] && install -m 755 "$(dirname "$0")/knock-open-udp" "$BIN_DIR/knock-open-udp"
   ok "已安装管理命令 $BIN_DIR/knock"
+fi
+
+# 开机把中继的 UDP 端口放行（1Panel 的防火墙链默认 DROP 所有 UDP，
+# 手工插的规则重启就没了，这里每次开机补一条，幂等）
+if [[ -x "$BIN_DIR/knock-open-udp" ]]; then
+  cat > /etc/systemd/system/knock-udp-open.service <<UNIT
+[Unit]
+Description=Knock 放行中继的 UDP 端口
+Before=knock-relay.service
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=$BIN_DIR/knock-open-udp
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now knock-udp-open.service >/dev/null 2>&1 || true
+  ok "已加开机放行 UDP 的单元"
 fi
 
 # 证书到期检查：每天一次，快到期就写进 journal（不自动续，续期是谁签谁负责）

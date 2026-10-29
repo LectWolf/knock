@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# knock-open-udp [端口]
+#
+# 确保本机防火墙放行某个 UDP 端口（默认取 node.json 里的中继端口）。
+# 为什么需要：1Panel 的防火墙链里有一条 "udp 1:65535 DROP"，排在放行规则前面，
+# 重启后手工插的规则会没；这个脚本幂等，能反复跑。
+set -uo pipefail
+CFG=/var/lib/knock/node.json
+PORT="${1:-}"
+if [[ -z "$PORT" ]]; then
+  PORT="$(sed -n 's/.*"relay_public_port": *"\([0-9]*\)".*/\1/p' "$CFG" 2>/dev/null | head -1)"
+fi
+PORT="${PORT:-30991}"
+
+# 已经放行就别动
+if iptables -C INPUT -p udp --dport "$PORT" -j ACCEPT 2>/dev/null; then
+  exit 0
+fi
+
+for chain in 1PANEL_BASIC INPUT; do
+  iptables -S "$chain" >/dev/null 2>&1 || continue
+  if iptables -C "$chain" -p udp --dport "$PORT" -j ACCEPT 2>/dev/null; then
+    exit 0
+  fi
+  # 找到那条"所有 UDP 都 DROP"的规则，插到它前面
+  pos="$(iptables -S "$chain" | grep -n -- '-p udp .*--dport 1:65535 .*-j DROP' | head -1 | cut -d: -f1)"
+  if [[ -n "$pos" ]]; then
+    # 链里第 1 行是 "-N 名字"，规则从第 2 行起
+    iptables -I "$chain" "$((pos - 1))" -p udp --dport "$PORT" -j ACCEPT && exit 0
+  fi
+  iptables -A "$chain" -p udp --dport "$PORT" -j ACCEPT && exit 0
+done
+exit 0
