@@ -17,6 +17,12 @@ pub struct Settings {
     /// 节点的显示名（「香港·荃湾」）。节点自己上报的名字优先，这只是给人看的缓存。
     #[serde(default)]
     pub node_name: String,
+    /// 选中节点的**编码原文**。
+    ///
+    /// 门牌号是「节点码 + 房间码」一整串，所以必须记住节点码：
+    /// 光有 URL 拼不出那串东西，朋友就得先去节点列表里找节点。
+    #[serde(default)]
+    pub node_code: String,
     /// 本机 MC 服务在哪个端口
     #[serde(default = "default_port")]
     pub port: u16,
@@ -44,6 +50,7 @@ impl Default for Settings {
             nickname: String::new(),
             node: String::new(),
             node_name: String::new(),
+            node_code: String::new(),
             port: default_port(),
             relay: default_relay(),
             theme: default_theme(),

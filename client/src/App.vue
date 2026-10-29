@@ -85,6 +85,13 @@ const fail = ref<FailReason>(
 const theme = ref<Theme>(pick("theme", ["auto", "light", "dark"], "auto"));
 
 const code = ref(params.get("code") ?? "······");
+/* 整串门牌号拆成「节点码」和「房间码」两截，房间码单独上色——一眼能看出哪半截是这个门的 */
+const codeParts = computed(() => {
+  const v = code.value;
+  if (!v.includes(".")) return null;
+  const [left, right] = v.split(".");
+  return right ? [left, right] : null;
+});
 /* 房客侧：本机入口 127.0.0.1:xxxxx，游戏里要填这个 */
 const entry = ref(params.get("addr") ?? "");
 
@@ -123,6 +130,7 @@ const loadSettings = async () => {
   relayPolicy.value = s.relay ?? "auto";
   nodeAddr.value = s.node ?? "";
   if (s.node_name) nodeName.value = s.node_name;
+  if (s.node_code) nodeCode.value = s.node_code;
   if (s.nickname) firstRun.value = false;
 };
 
@@ -133,6 +141,7 @@ const persist = async () => {
       nickname: nickname.value,
       node: nodeAddr.value,
       node_name: nodeName.value,
+      node_code: nodeCode.value,
       port: Number(server.value) || 25565,
       relay: relayPolicy.value,
       theme: theme.value,
@@ -224,6 +233,8 @@ const customCode = ref("");
 const nodeWarn = ref("");
 const pendingNode = ref<any | null>(null);
 const nodeName = ref(params.get("node_name") ?? "");
+/* 选中节点的编码原文：门牌号要拼成「节点码 + 房间码」一整串 */
+const nodeCode = ref(params.get("node_code") ?? "");
 /* 节点体检结果：延迟、有没有中继、版本对不对 */
 const probes = ref<Record<string, any>>(
   params.get("demo") === "nodes"
@@ -305,12 +316,13 @@ const chooseNode = (n: any) => {
     pendingNode.value = n;
     return;
   }
-  void applyNode(n.url, n.name || n.label || "");
+  void applyNode(n.url, n.name || n.label || "", n.code || "");
 };
 
-const applyNode = async (url: string, name: string) => {
+const applyNode = async (url: string, name: string, codeText = "") => {
   nodeAddr.value = url;
   nodeName.value = name;
+  if (codeText) nodeCode.value = codeText;
   pendingNode.value = null;
   nodeWarn.value = "";
   await persist();
@@ -320,7 +332,7 @@ const confirmSwap = async () => {
   const n = pendingNode.value;
   if (!n) return;
   await closeDoor();
-  await applyNode(n.url, n.name || n.label || "");
+  await applyNode(n.url, n.name || n.label || "", n.code || "");
 };
 
 const useCustomNode = async () => {
@@ -333,11 +345,12 @@ const useCustomNode = async () => {
     return;
   }
   if (doorBusy() && url !== nodeAddr.value) {
-    pendingNode.value = { url, name: "自定义节点" };
+    pendingNode.value = { url, name: "自定义节点", code };
     return;
   }
+  const used = customCode.value.trim();
   customCode.value = "";
-  await applyNode(url, "自定义节点");
+  await applyNode(url, "自定义节点", used);
 };
 
 watch(showSettings, (open) => {
@@ -370,25 +383,23 @@ watch(
 const themeLabel = computed(() => (theme.value === "auto" ? "跟随系统" : theme.value === "light" ? "亮色" : "暗色"));
 const nextTheme = () => (theme.value = theme.value === "auto" ? "light" : theme.value === "light" ? "dark" : "auto");
 
-/* 门牌号只保留 Crockford 字母表里的字符，转大写 */
+/* 门牌号是「节点码 + 房间码」一整串（也可能只贴 6 位短码）。
+   只保留 Crockford 字母表和那个点，别把整串截断。 */
 const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const cleanCode = (raw: string) =>
-  raw
+const cleanCode = (raw: string) => {
+  const kept = raw
     .toUpperCase()
     .replace(/[O]/g, "0")
     .replace(/[IL]/g, "1")
     .split("")
-    .filter((c) => ALPHABET.includes(c))
-    .slice(0, 6)
+    .filter((c) => ALPHABET.includes(c) || c === ".")
     .join("");
+  // 连续的点和开头的点都去掉：整串只可能有一个分隔符
+  return kept.replace(/\.{2,}/g, ".").replace(/^\./, "").slice(0, 64);
+};
 watch(input, (v) => {
   const c = cleanCode(v);
   if (c !== v) input.value = c;
-});
-/* 门牌号只可能是大写字母和数字：边打边清，别等提交才报错 */
-watch(input, (v) => {
-  const clean = v.toUpperCase().replace(/[^0-9A-Z]/g, "").slice(0, 6);
-  if (clean !== v) input.value = clean;
 });
 /* 服务号同理，只留数字，最多 5 位 */
 watch(server, (v) => {
@@ -396,7 +407,11 @@ watch(server, (v) => {
   if (clean !== v) server.value = clean;
 });
 
-const canKnock = computed(() => input.value.length === 6);
+const canKnock = computed(() => {
+  const v = input.value;
+  if (/^[0-9A-Z]{6}$/.test(v)) return true;           // 光秃秃的 6 位
+  return /^[0-9A-Z]{4,}\.[0-9A-Z]{6}$/.test(v);        // 短邀请 / 完整邀请
+});
 const validPort = computed(() => {
   const n = Number(server.value);
   return Number.isInteger(n) && n >= 1 && n <= 65535;
@@ -748,7 +763,7 @@ const back = async () => {
                   autocomplete="off"
                   spellcheck="false"
                   maxlength="6"
-                  placeholder="A7K2M9"
+                  placeholder="整串门牌号，或 6 位短码"
                 />
               </label>
               <p v-if="warn" class="warn">{{ warn }}</p>
@@ -785,8 +800,16 @@ const back = async () => {
             <span class="dot-sep">·</span>
             <span class="mono">{{ opened }} 分钟</span>
           </div>
-          <p class="eyebrow">门牌号</p>
-          <div class="code-display mono">{{ code }}</div>
+          <p class="eyebrow">门牌号（整串发给他）</p>
+          <div class="code-display mono" :class="{ full: code.length > 8 }">
+            <template v-if="codeParts">
+              {{ codeParts[0] }}<span class="invite-room">.{{ codeParts[1] }}</span>
+            </template>
+            <template v-else>{{ code }}</template>
+          </div>
+          <p class="note code-hint">
+            这一整串里带着节点，他粘贴就能敲，不用先去加节点。
+          </p>
           <div class="row">
             <button class="ghost" type="button" @click="copyCode">
               {{ copied ? "已复制" : "复制门牌号" }}
@@ -1079,6 +1102,22 @@ const back = async () => {
 }
 
 /* —— 门牌号 —— */
+.invite-room {
+  color: var(--accent);
+  font-weight: 600;
+}
+.code-display.full {
+  font-size: 13.5px;
+  letter-spacing: 0.2px;
+  line-height: 1.55;
+  word-break: break-all;
+  text-align: left;
+  padding: 12px 14px;
+}
+.code-hint {
+  margin: 8px 0 0;
+  max-width: 360px;
+}
 .code-display {
   font-size: 40px;
   font-weight: 600;
@@ -2028,7 +2067,23 @@ textarea {
 
 @media (prefers-reduced-motion: reduce) {
   .view > *,
-  .code-display {
+  .invite-room {
+  color: var(--accent);
+  font-weight: 600;
+}
+.code-display.full {
+  font-size: 13.5px;
+  letter-spacing: 0.2px;
+  line-height: 1.55;
+  word-break: break-all;
+  text-align: left;
+  padding: 12px 14px;
+}
+.code-hint {
+  margin: 8px 0 0;
+  max-width: 360px;
+}
+.code-display {
     animation: none;
   }
   .view-enter-active,

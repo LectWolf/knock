@@ -117,7 +117,24 @@ fn open_door(app: AppHandle, st: State<'_, App>, port: u16) -> Result<(), String
 
 #[tauri::command]
 fn knock(app: AppHandle, st: State<'_, App>, invite: String) -> Result<(), String> {
-    let s = settings::load(&config_dir(&app));
+    let mut s = settings::load(&config_dir(&app));
+
+    // 门牌号可能自带节点码（完整邀请）。那就用**那串里写的节点**，
+    // 而不是设置里当前选的——否则朋友发来一整串，你还得先去节点列表里加节点。
+    if let Ok(knock::invite::Invite::Full { node, .. }) = knock::invite::Invite::parse(&invite) {
+        if let Some(text) = node.encode().ok() {
+            if let Some(url) = knock::nodes::List::url_of(&text) {
+                if url != s.node {
+                    s.node = url;
+                    s.node_name = String::new();
+                }
+            }
+            if s.node_code != text {
+                s.node_code = text;
+            }
+            let _ = settings::save(&config_dir(&app), &s);
+        }
+    }
     let mut transport = build_transport(&app, &s)?;
     transport
         .connect(Target::Knock { invite: &invite })
@@ -186,14 +203,23 @@ fn node_url_from_code(code: String) -> Option<String> {
     knock::nodes::List::url_of(code.trim())
 }
 
-/// 现在这扇门的门牌号。没开门时是空。
+/// 现在这扇门的门牌号。
+///
+/// **门牌号就是完整邀请**：`<节点码>.<房间码>`。一整串发给朋友，他粘贴就能敲，
+/// 不用先上节点列表找节点。知道节点码的时候绝不给半串。
 #[tauri::command]
-fn door_code(st: State<'_, App>) -> Option<String> {
-    st.transport
+fn door_code(app: AppHandle, st: State<'_, App>) -> Option<String> {
+    let room = st
+        .transport
         .lock()
         .unwrap()
         .as_ref()
-        .and_then(|t| t.room_code())
+        .and_then(|t| t.room_code())?;
+    let s = settings::load(&config_dir(&app));
+    match knock::invite::NodeCode::decode(s.node_code.trim()) {
+        Ok(node) => knock::invite::Invite::full(&node, &room).ok().or(Some(room)),
+        Err(_) => Some(room),
+    }
 }
 
 #[tauri::command]
