@@ -92,6 +92,11 @@ const codeParts = computed(() => {
   const [left, right] = v.split(".");
   return right ? [left, right] : null;
 });
+/* 节点码每 4 个字符切一刀：35 个字符摊成一行谁都不想读 */
+const nodeGroups = computed(() => {
+  const left = codeParts.value?.[0] ?? "";
+  return left.match(/.{1,5}/g) ?? [];
+});
 /* 房客侧：本机入口 127.0.0.1:xxxxx，游戏里要填这个 */
 const entry = ref(params.get("addr") ?? "");
 
@@ -197,7 +202,7 @@ const nodeList = ref<any[]>(
   params.get("demo") === "nodes"
     ? [
         { code: "hk", label: "香港·荃湾", name: "香港·荃湾", url: "http://154.36.165.162:30990", relay: true, note: "项目自测节点" },
-        { code: "jp", label: "日本·东京", name: "日本·东京", url: "http://example.invalid:30990", relay: false, note: "只做信令" },
+        { code: "jp", label: "日本·东京", name: "日本·东京", url: "http://example.invalid:30990", relay: false, note: "没有中继" },
         { code: "us", label: "美国·芝加哥", name: "美国·芝加哥", url: "http://example2.invalid:30990", relay: true, note: "" },
       ]
     : [],
@@ -265,7 +270,7 @@ const pingOf = (url: string) => probes.value[url];
 const pingLabel = (url: string) => {
   const p = pingOf(url);
   if (!p) return "测速中…";
-  if (!p.proto_ok) return p.error === "版本对不上" ? "版本对不上" : "不通";
+  if (!p.proto_ok) return p.error === "版本对不上" ? "太旧了" : "不通";
   return p.ms != null ? p.ms + " ms" : "超时";
 };
 const pingClass = (url: string) => {
@@ -282,7 +287,7 @@ const filteredNodes = computed(() => {
   const q = nodeQuery.value.trim().toLowerCase();
   if (!q) return nodeList.value;
   return nodeList.value.filter((n: any) =>
-    [n.name, n.label, n.note, n.relay ? "能绕路" : "只做信令"]
+    [n.name, n.label, n.note, n.relay ? "能绕路" : "仅直连"]
       .filter(Boolean)
       .some((v: string) => String(v).toLowerCase().includes(q)),
   );
@@ -432,8 +437,8 @@ const failCopy: Record<FailReason, { title: string; hint: string }> = {
   blocked_by_firewall: { title: "门被挡住了", hint: "本机的防护软件挡住了出门的路，放行一次就好。" },
   symmetric_nat: { title: "两边都出不去", hint: "这条路走不通，需要在设置里允许绕路。" },
   node_outdated: {
-    title: "服务器版本太旧",
-    hint: "这个节点还是老版本，连不上。让节点主人更新一下，或者换一个节点。",
+    title: "这台节点太旧了",
+    hint: "它对不上版本，敲不开。换一台节点，或者让节点主人更新。",
   },
   relay_unavailable: { title: "绕路也走不通", hint: "过一会儿再试，或者换一个门牌号。" },
 };
@@ -534,7 +539,7 @@ const knock = async () => {
 /* 把 Rust 那边的中文错误原样露出来；技术错误归到一句人话 */
 const explain = (e: any) => {
   const raw = typeof e === "string" ? e : (e?.message ?? "");
-  if (raw.includes("先添加一个节点")) return "还没填节点，去设置里加一个";
+  if (raw.includes("先添加一个节点")) return "还没选节点，先去设置里挑一台";
   if (raw.includes("IllegalEvent")) return "现在这个状态没法做这件事";
   return raw ? "没做成，稍后再试" : "没做成，稍后再试";
 };
@@ -605,7 +610,7 @@ const back = async () => {
       <!-- 选节点：单独一页，宽列表 + 筛选 -->
       <template v-else-if="showNodes">
         <h1 class="title">选个节点</h1>
-        <p class="lede">门牌号只在某个节点上有意义，先挑一个。</p>
+        <p class="lede">挑一台离你近的，敲门更快。</p>
 
         <input
           v-model="nodeQuery"
@@ -626,8 +631,8 @@ const back = async () => {
             <span class="node-main">
               <span class="node-name">{{ n.name || n.label }}</span>
               <span class="node-sub">
-                {{ relayOf(n.url) ? "能绕路" : "只做信令" }}<template
-                  v-if="n.note && n.note !== (relayOf(n.url) ? '能绕路' : '只做信令')"
+                {{ relayOf(n.url) ? "能绕路" : "仅直连" }}<template
+                  v-if="n.note && n.note !== (relayOf(n.url) ? '能绕路' : '仅直连')"
                 >
                   · {{ n.note }}</template
                 >
@@ -666,7 +671,7 @@ const back = async () => {
               使用
             </button>
           </div>
-          <p class="note">节点部署完会打印这一串，形如 377PN6H4MPH0…</p>
+          <p class="note">节点装好会给你一串编码，粘这里就行。</p>
         </div>
 
         <p v-if="nodeWarn" class="warn">{{ nodeWarn }}</p>
@@ -763,7 +768,7 @@ const back = async () => {
                   autocomplete="off"
                   spellcheck="false"
                   maxlength="6"
-                  placeholder="整串门牌号，或 6 位短码"
+                  placeholder="粘门牌号进来"
                 />
               </label>
               <p v-if="warn" class="warn">{{ warn }}</p>
@@ -800,22 +805,24 @@ const back = async () => {
             <span class="dot-sep">·</span>
             <span class="mono">{{ opened }} 分钟</span>
           </div>
-          <p class="eyebrow">门牌号（整串发给他）</p>
-          <div class="code-display mono" :class="{ full: code.length > 8 }">
+          <p class="eyebrow">门牌号</p>
+          <button class="invite" type="button" @click="copyCode" :title="code">
             <template v-if="codeParts">
-              {{ codeParts[0] }}<span class="invite-room">.{{ codeParts[1] }}</span>
+              <span class="invite-node mono">
+                <span v-for="(g, i) in nodeGroups" :key="i" class="invite-group">{{ g }}</span>
+              </span>
+              <span class="invite-room mono">{{ codeParts[1] }}</span>
             </template>
-            <template v-else>{{ code }}</template>
-          </div>
-          <p class="note code-hint">
-            这一整串里带着节点，他粘贴就能敲，不用先去加节点。
-          </p>
-          <div class="row">
-            <button class="ghost" type="button" @click="copyCode">
-              {{ copied ? "已复制" : "复制门牌号" }}
-            </button>
-            <span class="note inline">你在，门就开着</span>
-          </div>
+            <span v-else class="invite-plain mono">{{ code }}</span>
+            <span class="invite-foot">
+              <span class="invite-tip" :class="{ done: copied }">{{ copied ? "已复制" : "复制" }}</span>
+              <svg class="invite-icon" viewBox="0 0 24 24" aria-hidden="true">
+                <rect x="9" y="9" width="11" height="11" rx="2.5" />
+                <path d="M15 5.5A2.5 2.5 0 0 0 12.5 3H6.5A2.5 2.5 0 0 0 4 5.5v6A2.5 2.5 0 0 0 6.5 14" />
+              </svg>
+            </span>
+          </button>
+          <p class="note code-hint">发给他，粘一下就进来了。</p>
           <div class="guests">
             <div class="guests-head">
               <span>门里的人</span>
@@ -1102,21 +1109,90 @@ const back = async () => {
 }
 
 /* —— 门牌号 —— */
-.invite-room {
-  color: var(--accent);
-  font-weight: 600;
-}
-.code-display.full {
-  font-size: 13.5px;
-  letter-spacing: 0.2px;
-  line-height: 1.55;
-  word-break: break-all;
-  text-align: left;
-  padding: 12px 14px;
-}
 .code-hint {
-  margin: 8px 0 0;
-  max-width: 360px;
+  margin: 10px 0 0;
+  max-width: 380px;
+}
+
+/* —— 邀请卡片 ——
+   35 个字符硬摊一行很难看，所以：节点码按 4 个一组排、房间码单独放大上色，
+   整块就是按钮——点一下整串进剪贴板，不用去够右边那个小复制键。 */
+.invite {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 18px 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+.invite:hover {
+  border-color: rgba(217, 160, 91, 0.42);
+  background: rgba(217, 160, 91, 0.05);
+}
+.invite:active {
+  transform: scale(0.995);
+}
+.invite-node {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  max-width: 168px;
+  margin: 0 auto;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.invite-group {
+  white-space: nowrap;
+}
+.invite-room {
+  display: block;
+  margin-top: 6px;
+  font-size: 27px;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  padding-left: 0.18em;
+}
+/* 分隔符自己站一行会很怪：缩小、压暗，让它只当分界线 */
+.invite-dot {
+  color: var(--muted);
+  opacity: 0.55;
+  margin-right: 0.06em;
+  font-size: 0.7em;
+}
+.invite-plain {
+  font-size: 22px;
+  letter-spacing: 0.14em;
+  color: var(--text);
+}
+.invite-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.invite-tip {
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: color 0.18s ease;
+}
+.invite-tip.done {
+  color: var(--accent);
+}
+.invite-icon {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  opacity: 0.75;
 }
 .code-display {
   font-size: 40px;
@@ -2067,21 +2143,90 @@ textarea {
 
 @media (prefers-reduced-motion: reduce) {
   .view > *,
-  .invite-room {
-  color: var(--accent);
+  .code-hint {
+  margin: 10px 0 0;
+  max-width: 380px;
+}
+
+/* —— 邀请卡片 ——
+   35 个字符硬摊一行很难看，所以：节点码按 4 个一组排、房间码单独放大上色，
+   整块就是按钮——点一下整串进剪贴板，不用去够右边那个小复制键。 */
+.invite {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 18px 16px 14px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.02);
+  cursor: pointer;
+  position: relative;
+  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+.invite:hover {
+  border-color: rgba(217, 160, 91, 0.42);
+  background: rgba(217, 160, 91, 0.05);
+}
+.invite:active {
+  transform: scale(0.995);
+}
+.invite-node {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 4px 12px;
+  max-width: 168px;
+  margin: 0 auto;
+  font-size: 13px;
+  color: var(--muted);
+  letter-spacing: 0.06em;
+}
+.invite-group {
+  white-space: nowrap;
+}
+.invite-room {
+  display: block;
+  margin-top: 6px;
+  font-size: 27px;
   font-weight: 600;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  padding-left: 0.18em;
 }
-.code-display.full {
-  font-size: 13.5px;
-  letter-spacing: 0.2px;
-  line-height: 1.55;
-  word-break: break-all;
-  text-align: left;
-  padding: 12px 14px;
+/* 分隔符自己站一行会很怪：缩小、压暗，让它只当分界线 */
+.invite-dot {
+  color: var(--muted);
+  opacity: 0.55;
+  margin-right: 0.06em;
+  font-size: 0.7em;
 }
-.code-hint {
-  margin: 8px 0 0;
-  max-width: 360px;
+.invite-plain {
+  font-size: 22px;
+  letter-spacing: 0.14em;
+  color: var(--text);
+}
+.invite-foot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 10px;
+}
+.invite-tip {
+  font-size: 11.5px;
+  color: var(--muted);
+  transition: color 0.18s ease;
+}
+.invite-tip.done {
+  color: var(--accent);
+}
+.invite-icon {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: var(--muted);
+  stroke-width: 1.6;
+  opacity: 0.75;
 }
 .code-display {
     animation: none;
