@@ -137,9 +137,12 @@ ok "配置写到 $DATA_DIR/node.json"
 if (( RELAY )); then
   cat > "$RELAY_TOML" <<'TOML'
 # Knock 中继：只听环回，对外由 knock-hub 那一个端口转进来
+# 对外只开一个端口——30991、9090 都不需要放行，也不需要写进安全组
 enable_relay = true
 http_bind_addr = "127.0.0.1:30991"
 enable_quic_addr_discovery = false
+enable_metrics = false
+metrics_bind_addr = "127.0.0.1:9090"
 TOML
   cat > "$RELAY_UNIT" <<UNIT
 [Unit]

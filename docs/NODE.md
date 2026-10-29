@@ -153,3 +153,16 @@ ssh -p 19508 root@<主机> 'chmod +x /usr/local/bin/knock-hub.new   && cp /usr/l
 安装：`sudo ./install.sh`，四个问题（名字 / 对外地址 / 端口 / 要不要中继），装完自启动。
 管理：`knock`（菜单）、`knock status`、`knock code`、`knock relay on|off`、`knock uninstall`。
 演示：`docs/install-demo.html`（模拟安装过程）。
+
+### 实测：整台机器只有一个公网监听
+
+```console
+$ ss -tlnp | grep -E "3099|9090"
+LISTEN 0 128   127.0.0.1:30991   0.0.0.0:*   users:(("iroh-relay",...))   ← 只听环回
+LISTEN 0 4096        *:30990          *:*   users:(("knock-hub",...))    ← 唯一的公网口
+```
+
+注意两项容易漏的：
+
+- `iroh-relay` 的 `http_bind_addr` 必须是 `127.0.0.1:30991`。写成 `0.0.0.0` 就等于又开了个公网口。
+- `--dev` 模式默认还会起一个指标服务（9090）。配 `enable_metrics = false`，或者把它绑到环回。

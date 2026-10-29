@@ -731,7 +731,7 @@ const back = async () => {
       <template v-else-if="state === 'idle'">
         <div class="choice" :class="{ picked: mode !== 'none' }">
           <h1 class="title">今天要哪一头</h1>
-          <p class="lede">开门的人发号，敲门的人输号。</p>
+          <p class="lede">开门的人发号，敲门的人粘进来。</p>
 
           <div class="choice-row">
             <button
@@ -741,7 +741,7 @@ const back = async () => {
               @click="pick_('knock')"
             >
               <span class="choice-name">敲门</span>
-              <span class="choice-sub">拿到号就能进</span>
+              <span class="choice-sub">他把号发你就行</span>
             </button>
             <button
               class="choice-card"
