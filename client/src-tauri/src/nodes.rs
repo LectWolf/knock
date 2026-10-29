@@ -308,7 +308,8 @@ mod probe_tests {
         println!("{p:?}");
         assert!(p.ms.is_some(), "节点应该通：{:?}", p.error);
         assert!(p.proto_ok, "协议应当对得上");
-        assert!(p.relay, "这台节点是带中继的");
+        // 中继是节点自己的选择：香港那台带，枣庄那台没带，两条都算正常
+        println!("中继：{}", if p.relay { "有" } else { "无" });
         let ms = p.ms.unwrap();
         assert!(ms < 2000, "延迟离谱：{ms} ms");
     }
