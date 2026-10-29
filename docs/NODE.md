@@ -101,7 +101,7 @@ sudo /usr/local/bin/knock-hub -data-dir /var/lib/knock -print-code
 
 | 节点 | 地址 | 节点码 | 备注 |
 |---|---|---|---|
-| 香港·荃湾 | `http://node-tw.mcii.cc:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继 `https://node-tw.mcii.cc:30991`（TLS + QUIC 7842，能帮打洞） |
+| 香港·荃湾 | `http://node-tw.mcii.cc:30990`（SSH 19508） | `377PN6H4MPH0WYEFD838Q42C674TR` | 项目测试节点，中继 `https://node-tw.mcii.cc:30991`（TLS，QUIC 同端口 30991/UDP，能帮打洞） |
 
 升级二进制的方式（就地替换，留 `.old` 可回滚）：
 
@@ -182,7 +182,7 @@ LISTEN 0 4096        *:30990          *:*   users:(("knock-hub",...))    ← 唯
 ### TLS 不一定要 443
 
 `iroh-relay` 的 `[tls] https_bind_addr` 可以写任意端口；证书只校验证书上的**域名**，跟端口无关。
-例如 `https://knock.mcii.cc:30991` 完全合法。QUIC 地址发现再占用一个 **UDP** 端口（默认同号或 7842）。
+例如 `https://knock.mcii.cc:30991` 完全合法。QUIC 地址发现走 UDP，端口可以和中继**同号**（我们的客户端就是这么设的）。
 
 ### 证书两条路
 
@@ -269,10 +269,11 @@ DST=/etc/ssl/knock
 - 1Panel 执行时**工作目录就是证书推送目录**，证书是 `./fullchain.pem` / `./privkey.pem`
 - 脚本里不用 SSH：同一台机，`install -m644` 复制过去就行
 - 续期后脚本再跑一次，`Reloading` 会自动加载新证书，不重启也不掉线
-- **QUIC 固定 7842**：客户端拿到的 `RelayConfig` 不带端口时默认按 7842 找地址发现，
-  所以 `quic_bind_addr` 必须是 7842，别跟着 https 端口走
+- **QUIC 跟中继同端口**：客户端会显式把 QUIC 端口设成中继 URL 的端口（`pipe.rs` 里做），
+  所以 `quic_bind_addr` 写 `0.0.0.0:<中继端口>`，节点只需要开一个端口号（TCP + UDP 同号）
+- 客户端不设这个端口时 iroh 默认按 7842 找地址发现——那就是"为什么每台节点都得多开一个 UDP"的来源
 - iroh-relay 的 systemd unit **不能带 `--dev`**，`--dev` 会强制忽略 TLS 配置（踩过）
-- 安全组：`TCP 30991`（中继）+ `UDP 7842`（打洞）
+- 安全组：`TCP 30991` + `UDP 30991`（同号，中继与打洞共用）
 
 验证：
 
@@ -281,5 +282,5 @@ DST=/etc/ssl/knock
 # curl -s http://node-tw.mcii.cc:30990/healthz | grep relay_url
 "relay_url":"https://node-tw.mcii.cc:30991"
 # ss -tlnp | grep 30991   → iroh-relay
-# ss -ulnp | grep 7842    → iroh-relay
+# ss -ulnp | grep 30991   → iroh-relay
 ```

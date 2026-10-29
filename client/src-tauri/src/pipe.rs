@@ -85,6 +85,20 @@ pub fn relay_mode(relay_url: Option<&str>) -> io::Result<RelayMode> {
             format!("中继地址 {raw} 不合法：{e}"),
         )
     })?;
+
+    // 地址发现有自己的一套端口，iroh 默认按 7842 找。那意味着每台节点都得额外
+    // 开一个 UDP 端口；我们把它钉成和中继 URL 相同的端口，节点只开一个数就够。
+    let urls: Vec<_> = map.urls();
+    if let Some(url) = urls.first() {
+        if let Some(port) = url.port() {
+            let cfg = iroh::RelayConfig::new(
+                url.clone(),
+                Some(iroh_relay::RelayQuicConfig::new(port)),
+            );
+            map.insert(url.clone(), std::sync::Arc::new(cfg));
+        }
+    }
+
     Ok(RelayMode::Custom(map))
 }
 
@@ -472,6 +486,20 @@ mod tests {
         // 所以这里允许，只在 stderr 提醒一句（正式部署仍建议上 TLS）。
         let mode = relay_mode(Some("http://relay.example.com")).expect("明文中继应当可用");
         assert_eq!(relay_urls(&mode).len(), 1);
+    }
+
+    #[test]
+    fn the_quic_port_follows_the_relay_port() {
+        // 客户端默认会去 7842 找 QUIC 地址发现，那节点就得多开一个 UDP 端口。
+        // 我们显式把 QUIC 端口设成和中继 URL 一样的端口，节点只开一个 UDP 就够。
+        let mode = relay_mode(Some("https://relay.example.com:30991")).expect("https 中继应当可用");
+        let map = match mode {
+            RelayMode::Custom(map) => map,
+            other => panic!("应当是 Custom：{other:?}"),
+        };
+        let urls: Vec<_> = map.urls();
+        let cfg = map.get(&urls[0]).expect("应当有这个中继");
+        assert_eq!(cfg.quic.as_ref().map(|q| q.port), Some(30991));
     }
 
     #[test]

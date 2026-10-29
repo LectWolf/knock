@@ -37,13 +37,13 @@ metrics_bind_addr = "127.0.0.1:9090"
 [tls]
 cert_mode = "Reloading"
 https_bind_addr = "0.0.0.0:${PORT}"
-# 客户端默认按 7842 找 QUIC（RelayConfig 里没带端口就走这个默认值），
-# 所以打洞辅助固定用 7842/UDP，别跟 https 端口混。
-quic_bind_addr = "0.0.0.0:7842"
+# 跟 https 同端口（UDP）：客户端会显式把 QUIC 端口设成中继端口，
+# 这样节点只开一个端口（TCP+UDP 同号）。
+quic_bind_addr = "0.0.0.0:${PORT}"
 manual_cert_path = "${CERT}"
 manual_key_path = "${PKEY}"
 TOML
-say_ok "中继配置写好（HTTPS ${PORT} · QUIC 7842）"
+say_ok "中继配置写好（HTTPS + QUIC 都在 ${PORT}）"
 
 systemctl restart knock-relay
 sleep 2
@@ -65,5 +65,5 @@ if [[ -f "$CFG" ]]; then
   say_ok "节点配置已更新：https://${DOMAIN}:${PORT}"
 fi
 
-printf '\n%s安全组要放行：TCP %s（中继）+ UDP 7842（打洞）%s\n' "$ACC" "$PORT" "$OFF"
+printf '\n%s安全组要放行：TCP %s（中继）+ UDP %s（打洞）%s\n' "$ACC" "$PORT" "$PORT" "$OFF"
 systemctl is-active knock-node knock-relay | paste -sd' '
