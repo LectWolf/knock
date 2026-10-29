@@ -112,6 +112,42 @@ relay_toggle() {
   systemctl is-active --quiet $UNIT && ok "服务已重启" || warn "服务没起来：journalctl -u $UNIT -n 30"
 }
 
+# 证书：看还剩多少天；--check 给定时器用（快到期返回 1，让 journal 留一条）
+cert() {
+  local path="${KNOCK_CERT_PATH:-}" check="${1:-}" end days mode
+  if [[ -z "$path" ]]; then
+    path="$(sed -n 's/.*manual_cert_path *= *"\([^"]*\)".*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  fi
+  if [[ -z "$path" || ! -f "$path" ]]; then
+    warn "没找到证书：${path:-（配置里没有）}"
+    [[ -n "$check" ]] && return 1
+    return 0
+  fi
+  end="$(openssl x509 -enddate -noout -in "$path" 2>/dev/null | cut -d= -f2)"
+  if [[ -z "$end" ]]; then
+    warn "读不出到期时间：$path（是 PEM 证书吗）"
+    [[ -n "$check" ]] && return 1
+    return 0
+  fi
+  days="$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))"
+  mode="$(sed -n 's/.*cert_mode *= *"\([^"]*\)".*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  if [[ -n "$check" ]]; then
+    if (( days < 30 )); then
+      warn "证书还有 $days 天到期（$end）：$path —— 该续了"
+      return 1
+    fi
+    dim "证书还有 $days 天到期，正常"
+    return 0
+  fi
+  printf '  证书    %s\n' "$path"
+  printf '  到期    %s（还有 %s 天）\n' "$end" "$days"
+  if [[ "$mode" == "Reloading" ]]; then
+    printf '  模式    Reloading · 换掉文件就自动生效，不用重启\n'
+  else
+    printf '  模式    %s\n' "${mode:-未知}"
+  fi
+}
+
 uninstall() {
   need_root
   local keep
@@ -128,7 +164,7 @@ menu() {
   while true; do
     echo
     printf '%sKnock 节点管理%s\n\n' "$C_ACC" "$C_OFF"
-    printf '  1) 状态\n  2) 节点码\n  3) 日志\n  4) 重启\n  5) 开关中继\n  6) 改端口\n  7) 升级\n  8) 卸载\n  0) 退出\n\n'
+    printf '  1) 状态\n  2) 节点码\n  3) 日志\n  4) 重启\n  5) 开关中继\n  6) 改端口\n  7) 证书\n  8) 升级\n  9) 卸载\n  0) 退出\n\n'
     read -r -p "选一个： " choice
     case "$choice" in
       1) status;;
@@ -137,8 +173,9 @@ menu() {
       4) need_root && systemctl restart $UNIT && ok "重启了";;
       5) need_root; read -r -p "开还是关？[on/off] " w; relay_toggle "$w";;
       6) need_root; read -r -p "新的房间服务端口： " p; set_port "$p";;
-      7) warn "升级请带新二进制重跑 install.sh";;
-      8) uninstall; break;;
+      7) cert;;
+      8) warn "升级请带新二进制重跑 install.sh";;
+      9) uninstall; break;;
       0|"") break;;
       *) warn "没有这个选项";;
     esac
@@ -149,6 +186,7 @@ case "${1:-menu}" in
   status) status;;
   code) code;;
   port) set_port "${2:-}";;
+  cert) shift; cert "${1:-}";;
   logs) shift; journalctl -u $UNIT -n 80 --no-pager "$@";;
   restart) need_root && systemctl restart $UNIT && ok "重启了";;
   relay) relay_toggle "${2:-}";;

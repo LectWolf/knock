@@ -102,7 +102,7 @@ if (( RELAY )); then
       SCHEME=https; QAD=true
       TLS_BLOCK=$(cat <<TOML
 [tls]
-cert_mode = "Manual"
+cert_mode = "Reloading"
 https_bind_addr = "0.0.0.0:${RELAY_PORT}"
 quic_bind_addr = "0.0.0.0:${RELAY_PORT}"
 manual_cert_path = "${CERT}"
@@ -239,6 +239,33 @@ UNIT
 if [[ -f "$(dirname "$0")/knock" ]]; then
   install -m 755 "$(dirname "$0")/knock" "$BIN_DIR/knock"
   ok "已安装管理命令 $BIN_DIR/knock"
+fi
+
+# 证书到期检查：每天一次，快到期就写进 journal（不自动续，续期是谁签谁负责）
+if (( RELAY )) && [[ -n "$CERT" ]]; then
+  cat > /etc/systemd/system/knock-cert-check.service <<UNIT
+[Unit]
+Description=Knock 证书到期检查
+
+[Service]
+Type=oneshot
+Environment=KNOCK_CERT_PATH=$CERT
+ExecStart=$BIN_DIR/knock cert --check
+UNIT
+  cat > /etc/systemd/system/knock-cert-check.timer <<'UNIT'
+[Unit]
+Description=每天检查一次 Knock 证书
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now knock-cert-check.timer >/dev/null 2>&1 || true
+  ok "已加每日证书检查（快到期会记进 journal）"
 fi
 
 systemctl daemon-reload

@@ -205,3 +205,45 @@ knock            # 菜单，其中 6) 改端口
 ```
 
 改端口后记得同步云厂商安全组。`knock port` 起不来会自动回滚到旧端口。
+
+## 证书怎么填、过期怎么办
+
+**填**：把 `.crt` / `.key` 的**路径**写进中继配置（`/etc/knock-relay.toml`）：
+
+```toml
+[tls]
+cert_mode = "Reloading"          # 关键：换文件自动生效
+https_bind_addr = "0.0.0.0:30991"
+quic_bind_addr = "0.0.0.0:30991"
+manual_cert_path = "/etc/ssl/knock/fullchain.pem"
+manual_key_path  = "/etc/ssl/knock/privkey.pem"
+```
+
+安装时等价写法：`--tls-domain knock.mcii.cc --cert … --key …`。
+也可以用 `cert_mode = "LetsEncrypt"` 让中继自己签、自己续。
+
+**过期**：
+
+- `knock cert` 打印证书路径、到期时间、还剩几天
+- 安装脚本会装一个每日定时器 `knock-cert-check.timer`，剩不到 30 天就往 journal 写一条
+- `cert_mode = "Reloading"` 会盯着这两个文件，**续期后换掉文件就自动生效，不用重启**
+- 不续期也不重启也能发现：`knock cert --check` 返回非 0
+
+实测（自签 20 天证书）：
+
+```console
+# knock cert
+  证书    /tmp/t.crt
+  到期    Nov 18 06:17:17 2026 GMT（还有 19 天）
+  模式    Reloading · 换掉文件就自动生效，不用重启
+
+# knock cert --check ; echo $?
+！证书还有 19 天到期 —— 该续了
+1
+```
+
+## 打洞成功之后连的是什么
+
+**是 IP，不是域名。** 域名只用于**中继**（TLS 证书要域名）。
+打洞成功意味着两端找到了一条直连路径，客户端拿到的是对端的 `IP:端口` 候选地址，
+这时域名完全没参与——所以改域名、换证书都不会影响已经直连上的会话。
