@@ -284,3 +284,39 @@ DST=/etc/ssl/knock
 # ss -tlnp | grep 30991   → iroh-relay
 # ss -ulnp | grep 30991   → iroh-relay
 ```
+
+## 打洞辅助（QAD）怎么验
+
+节点只要开一个端口号：`TCP 30991` + `UDP 30991`（客户端把 QUIC 端口钉成中继端口）。
+
+验 UDP 那一半：
+
+```console
+KNOCK_RELAY_URL=https://node-tw.mcii.cc:30991 cargo test --test qad -- --ignored --nocapture
+```
+
+期望看到：
+
+```
+网络报告：udp_v4=true ... global_v4=Some(223.64.169.51:2413)
+```
+
+`udp_v4=true` 就说明中继的 QUIC 往返通了，公网地址也报回来了，打洞有料可用。
+
+### 坑：1Panel 的防火墙会先 DROP 所有 UDP
+
+香港那台的 `1PANEL_BASIC` 链里有：
+
+```
+-A 1PANEL_BASIC -p udp -m udp --dport 1:65535 -j DROP
+```
+
+这条排在放行规则前面，所以 `UDP 30991` 进不来——表现是 TCP 通、UDP 静默丢包，
+`nstat -az | grep UdpInDatagrams` 计数不涨。要在 1Panel「防火墙」里显式放行 `30991/UDP`，
+或者把 ACCEPT 插到那条 DROP 之前（临时）：
+
+```console
+iptables -I 1PANEL_BASIC 4 -p udp --dport 30991 -j ACCEPT
+```
+
+1Panel 下次重排规则会把手工插入的规则冲掉，所以正式还是走面板加。
