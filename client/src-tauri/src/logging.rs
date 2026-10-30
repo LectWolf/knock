@@ -26,6 +26,23 @@ static SINK: OnceLock<Mutex<Sink>> = OnceLock::new();
 /// 日志文件叫什么。
 pub const FILE_NAME: &str = "latest.log";
 
+/// 日志该放哪儿：跟 settings.json 同一个目录（Windows 是
+/// `%APPDATA%\cc.mcii.knock`），不是在 exe 旁边。
+///
+/// 这样解压到只读目录（Program Files、U 盘）也能写；用户也不用满硬盘找日志。
+pub fn default_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("APPDATA") {
+        return PathBuf::from(dir).join("cc.mcii.knock");
+    }
+    if let Some(dir) = std::env::var_os("XDG_CONFIG_HOME") {
+        return PathBuf::from(dir).join("cc.mcii.knock");
+    }
+    if let Some(home) = std::env::var_os("HOME") {
+        return PathBuf::from(home).join(".config").join("cc.mcii.knock");
+    }
+    std::env::temp_dir().join("cc.mcii.knock")
+}
+
 fn timestamp() -> String {
     chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f").to_string()
 }

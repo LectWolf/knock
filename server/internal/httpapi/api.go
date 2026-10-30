@@ -59,6 +59,8 @@ type API struct {
 	name     string
 	// code 是这个节点的编码，客户端拿它拼完整门牌号。
 	code string
+	// maxRooms 同时开着的房间上限，0 = 不限
+	maxRooms int
 }
 
 // Option 是可选的防护配置。不传就是不限速（只在测试或本机调试时这样用）。
@@ -92,6 +94,11 @@ func WithRelayURL(u string) Option {
 
 // WithName 设置节点对外显示的名字，比如「香港·荃湾」。
 // 名字由节点自己报，不依赖任何公共名单——名单只是省去手输节点码。
+// WithMaxRooms 告诉客户端这扇门最多同时开几间——界面要显示"挤不挤"。
+func WithMaxRooms(n int) Option {
+	return func(a *API) { a.maxRooms = n }
+}
+
 // WithNodeCode 把节点编码挂上去，让 /healthz 能报出来。
 //
 // 客户端拼门牌号（<节点码>.<房间码>）要用它；不带的话，不在列表里的节点
@@ -342,6 +349,7 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 		"code":          a.code,
 		"proto":         protoInfo{API: ProtoAPI, Transport: ProtoTransport},
 		"rooms":         a.svc.Len(),
+		"max_rooms":     a.maxRooms,
 		"lookup_limit":  a.lookup.Limit(),
 		"create_limit":  a.create.Limit(),
 		"lookup_bucket": a.lookup.Len(),

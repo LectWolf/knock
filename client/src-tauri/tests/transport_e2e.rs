@@ -472,3 +472,42 @@ async fn knocking_alone_puts_the_guest_in_the_roster() {
         guest.state()
     );
 }
+
+
+/// 房主看到的名字应该是房客自己起的昵称，而不是写死的 "knock"；
+/// 踢人必须真的把人断掉、并从名册里消失（以前只摘名单，连接还挂着）。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "需要一台真节点；见文件头的环境变量"]
+async fn the_host_sees_my_nickname_and_can_show_me_out() {
+    let base = env("KNOCK_NODE_URL");
+    let node_code = env("KNOCK_NODE_CODE");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    let mc_port = fake_mc_server().await;
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_sink, _log) = recorder();
+    host.on_state(_sink);
+    host.connect(Target::Open { port: mc_port }).expect("房主受理");
+    wait_for("房主拿到门牌号", 25, || host.room_code().is_some()).await;
+    wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+
+    let invite = format!("{node_code}.{code}");
+    let mut guest = IrohTransport::new(Arc::clone(&client)).with_nickname("小乐");
+    let (_gsink, _glog) = recorder();
+    guest.on_state(_gsink);
+    guest.connect(Target::Knock { invite: &invite }).expect("房客受理");
+
+    let sessions = host.sessions();
+    let appeared = wait_or("名册里出现他", 25, || !sessions.is_empty()).await;
+    assert!(appeared, "敲了门就该出现在名册里");
+    let (peer, entry) = sessions.snapshot()[0].clone();
+    println!("名册：{:?}，绕路={}", entry.nickname, entry.via_relay);
+    assert_eq!(entry.nickname, "小乐", "房主该看到房客自己的昵称");
+
+    sessions.kick(&peer);
+    let gone = wait_or("名册里没他了", 10, || sessions.is_empty()).await;
+    println!("踢完名册 {} 人", sessions.len());
+    assert!(gone, "踢出去之后名册里不该还留着他");
+}

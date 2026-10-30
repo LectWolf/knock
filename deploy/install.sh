@@ -185,7 +185,7 @@ if (( RELAY )); then
 enable_relay = true
 http_bind_addr = "127.0.0.1:30992"
 enable_quic_addr_discovery = ${QAD}
-enable_metrics = false
+enable_metrics = true
 metrics_bind_addr = "127.0.0.1:9090"
 ${TLS_BLOCK}
 TOML
@@ -196,7 +196,7 @@ TOML
 enable_relay = true
 http_bind_addr = "127.0.0.1:30991"
 enable_quic_addr_discovery = false
-enable_metrics = false
+enable_metrics = true
 metrics_bind_addr = "127.0.0.1:9090"
 TOML
   fi

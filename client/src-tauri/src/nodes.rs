@@ -155,6 +155,10 @@ pub struct Probe {
     pub name: String,
     /// 协议对不对得上（对不上等于用不了，界面要说清楚）
     pub proto_ok: bool,
+    /// 现在开着的门数（读不到就是 None）
+    pub rooms: Option<u32>,
+    /// 同时最多能开几扇（0 / None = 不限）
+    pub max_rooms: Option<u32>,
     /// 节点自报的编码。有它才能拼出完整门牌号（`<节点码>.<房间码>`），
     /// 哪怕这个节点不在任何列表里。
     pub code: Option<String>,
@@ -170,6 +174,8 @@ pub fn probe(url: &str) -> Probe {
         relay: false,
         name: String::new(),
         proto_ok: false,
+        rooms: None,
+        max_rooms: None,
         code: None,
         error: String::new(),
     };
@@ -192,6 +198,10 @@ pub fn probe(url: &str) -> Probe {
                         #[serde(default)]
                         relay_allowed: bool,
                         #[serde(default)]
+                        rooms: u32,
+                        #[serde(default)]
+                        max_rooms: u32,
+                        #[serde(default)]
                         code: String,
                         #[serde(default)]
                         proto: Option<Proto>,
@@ -199,6 +209,8 @@ pub fn probe(url: &str) -> Probe {
                     match serde_json::from_str::<Health>(&body) {
                         Ok(h) => {
                             out.name = h.name;
+                            out.rooms = Some(h.rooms);
+                            out.max_rooms = Some(h.max_rooms);
                             let code = h.code.trim().to_ascii_uppercase();
                             if !code.is_empty() {
                                 out.code = Some(code);

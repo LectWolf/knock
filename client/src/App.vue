@@ -244,9 +244,9 @@ const nodeCode = ref(params.get("node_code") ?? "");
 const probes = ref<Record<string, any>>(
   params.get("demo") === "nodes"
     ? {
-        "http://154.36.165.162:30990": { url: "http://154.36.165.162:30990", ms: 38, relay: true, proto_ok: true, error: "" },
-        "http://example.invalid:30990": { url: "http://example.invalid:30990", ms: 156, relay: false, proto_ok: true, error: "" },
-        "http://example2.invalid:30990": { url: "http://example2.invalid:30990", ms: 620, relay: true, proto_ok: true, error: "" },
+        "http://154.36.165.162:30990": { url: "http://154.36.165.162:30990", ms: 38, relay: true, proto_ok: true, rooms: 2, max_rooms: 200, error: "" },
+        "http://example.invalid:30990": { url: "http://example.invalid:30990", ms: 156, relay: false, proto_ok: true, rooms: 9, max_rooms: 10, error: "" },
+        "http://example2.invalid:30990": { url: "http://example2.invalid:30990", ms: 620, relay: true, proto_ok: true, rooms: 0, max_rooms: 0, error: "" },
       }
     : {},
 );
@@ -282,6 +282,18 @@ const pingClass = (url: string) => {
   return "ping-slow";
 };
 const relayOf = (url: string) => pingOf(url)?.relay === true;
+/* 节点挤不挤：rooms / max_rooms。读不到就说"不限量"，别瞎猜。 */
+const loadOf = (url: string) => {
+  const p = pingOf(url);
+  if (!p || !p.proto_ok) return { text: "", cls: "" };
+  const rooms = Number(p.rooms ?? 0);
+  const max = Number(p.max_rooms ?? 0);
+  if (!max) return { text: "门数不限", cls: "load-loose" };
+  const pct = Math.round((rooms * 100) / max);
+  const cls = pct >= 80 ? "load-full" : pct >= 50 ? "load-busy" : "load-loose";
+  const mood = pct >= 80 ? "很挤" : pct >= 50 ? "有点挤" : "宽松";
+  return { text: `${rooms}/${max} 门 · ${mood}`, cls };
+};
 
 const filteredNodes = computed(() => {
   const q = nodeQuery.value.trim().toLowerCase();
@@ -655,6 +667,9 @@ const back = async () => {
                 >
                   · {{ n.note }}</template
                 >
+              </span>
+              <span v-if="loadOf(n.url).text" class="node-load" :class="loadOf(n.url).cls">
+                {{ loadOf(n.url).text }}
               </span>
             </span>
             <span class="node-meta">
@@ -1665,7 +1680,7 @@ textarea {
   flex-direction: column;
   gap: 8px;
   margin-top: 12px;
-  max-height: 246px;
+  max-height: 330px;
   overflow-y: auto;
   padding-right: 2px;
 }
@@ -1838,6 +1853,13 @@ textarea {
   font-size: 13px;
   color: var(--text);
 }
+.node-load {
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+.node-load.load-loose { color: var(--muted); }
+.node-load.load-busy { color: var(--warn, #d69a4a); }
+.node-load.load-full { color: var(--danger, #d1685f); }
 .node-sub {
   font-size: 11.5px;
   color: var(--muted);

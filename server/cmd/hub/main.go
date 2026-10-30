@@ -163,6 +163,7 @@ func main() {
 		httpapi.WithNodeID(identity.PublicKeyHex()),
 		httpapi.WithName(cfg.Name),
 		httpapi.WithNodeCode(codeText),
+		httpapi.WithMaxRooms(cfg.MaxRooms),
 		httpapi.WithRelayURL(cfg.RelayURL),
 	)
 

@@ -44,6 +44,8 @@ pub struct IrohTransport {
     code: Arc<Mutex<Option<String>>>,
     local: Arc<Mutex<Option<SocketAddr>>>,
     policy: RelayPolicy,
+    /// 敲门时报的名字
+    nickname: String,
     /// 房主侧的"门里的人"。房客侧用不上，但留着同一个实例，免得两套生命周期。
     sessions: Arc<SessionList>,
 }
@@ -60,12 +62,19 @@ impl IrohTransport {
             local: Arc::new(Mutex::new(None)),
             policy: RelayPolicy::Auto,
             sessions: Arc::new(SessionList::new()),
+            nickname: String::new(),
         }
     }
 
     /// 门里的人。界面拿到的是快照，踢人走 `kick`。
     pub fn sessions(&self) -> Arc<SessionList> {
         Arc::clone(&self.sessions)
+    }
+
+    /// 敲门时报什么名字。必须在 `connect` 之前调。
+    pub fn with_nickname(mut self, nickname: impl Into<String>) -> Self {
+        self.nickname = nickname.into();
+        self
     }
 
     /// 设置"打洞失败怎么办"的偏好。必须在 `connect` 之前调。
@@ -102,6 +111,7 @@ impl Transport for IrohTransport {
         };
         emit(&self.machine, &self.sink, entry);
 
+        let nickname = self.nickname.clone();
         let machine = Arc::clone(&self.machine);
         let sink = Arc::clone(&self.sink);
         let running = Arc::clone(&self.running);
@@ -139,6 +149,7 @@ impl Transport for IrohTransport {
                     code: code_slot,
                     local: local_slot,
                     policy,
+                    nickname,
                     sessions,
                 };
                 let _ = match flow {
@@ -204,6 +215,8 @@ struct Ctx {
     code: Arc<Mutex<Option<String>>>,
     local: Arc<Mutex<Option<SocketAddr>>>,
     policy: RelayPolicy,
+    /// 敲门时报的名字
+    nickname: String,
     /// 房主侧的"门里的人"。房客侧用不上，但留着同一个实例，免得两套生命周期。
     sessions: Arc<SessionList>,
 }
@@ -395,7 +408,7 @@ impl Ctx {
             let budget = Duration::from_secs(attempt.budget_secs);
             let outcome = match tokio::time::timeout(
                 budget,
-                pipe::hello_probe(&endpoint, addr.clone(), pipe::default_hello()),
+                pipe::hello_probe(&endpoint, addr.clone(), pipe::hello_as(&self.nickname)),
             )
             .await
             {
@@ -425,7 +438,8 @@ impl Ctx {
             let event = if via_relay { Event::RelayAccepted } else { Event::PunchSucceeded };
             self.emit(event);
 
-            let Ok(local) = pipe::listen_local(endpoint, addr).await else {
+            let hello = pipe::hello_as(&self.nickname);
+            let Ok(local) = pipe::listen_local_hello(endpoint, addr, hello).await else {
                 self.fail(FailReason::RelayUnavailable);
                 return Ok(());
             };

@@ -132,7 +132,7 @@ fn build_transport(app: &AppHandle, s: &Settings) -> Result<IrohTransport, Strin
     }
     klog!("INFO", "装配 transport：节点 {}", s.node);
     let client = Arc::new(HttpRoomClient::new(s.node.clone()));
-    let mut transport = IrohTransport::new(client);
+    let mut transport = IrohTransport::new(client).with_nickname(s.nickname.clone());
 
     // 状态只在 transport 内部迁移；这里只负责搬给界面
     let handle = app.clone();
@@ -457,7 +457,9 @@ fn main() {
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .unwrap_or_else(|| std::path::PathBuf::from("."));
-    let log_file = logging::init(&exe_dir);
+    // 日志跟设置放一起（%APPDATA%\cc.mcii.knock），不扔在 exe 旁边
+    let log_dir = logging::default_dir();
+    let log_file = logging::init(&log_dir);
     klog!("INFO", "Knock {} 启动", env!("CARGO_PKG_VERSION"));
     klog!("INFO", "程序目录：{}", exe_dir.display());
     klog!("INFO", "日志文件：{}", log_file.display());

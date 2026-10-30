@@ -23,29 +23,127 @@ dim()  { printf '%s%s%s\n' "$C_MUT" "$*" "$C_OFF"; }
 
 json_str() { sed -n 's/.*"'"$1"'": *"\([^"]*\)".*/\1/p' "$CFG" 2>/dev/null | head -1; }
 json_num() { sed -n 's/.*"'"$1"'": *\([0-9]*\).*/\1/p' "$CFG" 2>/dev/null | head -1; }
+
+# 中继的监控端口（Prometheus 文本）。没开监控就返回空。
+metrics_addr() { sed -n 's/^metrics_bind_addr *= *"\([^"]*\)"/\1/p' "$RELAY_TOML" 2>/dev/null | head -1; }
+metric() { # metric <指标名>：取不到返回空
+  local addr
+  addr="$(metrics_addr)"
+  [[ -n "$addr" ]] || return 1
+  curl -fsS --max-time 2 "http://$addr/metrics" 2>/dev/null | awk -v k="$1" '$1 == k { print $2; exit }'
+}
+human_bytes() {
+  awk -v b="${1:-0}" 'BEGIN { split("B KB MB GB TB", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ } printf "%.1f %s", b, u[i] }'
+}
+# UDP 端口放行了吗（1Panel 默认整段 DROP，最容易踩这个坑）
+# 规则可能是单端口、端口范围（30990:30991）或 multiport 列表，都得认。
+udp_allowed() {
+  local p="$1"
+  iptables -S 2>/dev/null | awk -v p="$p" '
+    /-j ACCEPT/ && /-p udp/ {
+      if (match($0, /--dports[= ]+[0-9:,]+/)) {
+        spec = substr($0, RSTART, RLENGTH); sub(/--dports[= ]+/, "", spec)
+        n = split(spec, parts, ",")
+        for (i = 1; i <= n; i++) {
+          if (parts[i] ~ /:/) { split(parts[i], r, ":"); if (p + 0 >= r[1] + 0 && p + 0 <= r[2] + 0) hit = 1 }
+          else if (parts[i] + 0 == p + 0) hit = 1
+        }
+      } else if (match($0, /--dport[= ]+[0-9]+(:[0-9]+)?/)) {
+        spec = substr($0, RSTART, RLENGTH); sub(/--dport[= ]+/, "", spec)
+        if (spec ~ /:/) { split(spec, r, ":"); if (p + 0 >= r[1] + 0 && p + 0 <= r[2] + 0) hit = 1 }
+        else if (spec + 0 == p + 0) hit = 1
+      }
+    }
+    END { exit(hit ? 0 : 1) }'
+}
 need_root() { [[ ${EUID:-0} -eq 0 ]] || { warn "这个操作要 root：sudo knock …"; exit 1; }; }
 
 status() {
-  local active name rooms port relay relay_port body relay_line
+  local active name rooms port relay relay_port maxr crowd body mood
   active="$(systemctl is-active $UNIT 2>/dev/null || true)"
   name="$(json_str name)"; port="$(json_num public_port)"
   relay="$(json_str relay_url)"; relay_port="$(json_str relay_public_port)"
+  maxr="$(json_num max_rooms)"; maxr="${maxr:-0}"
   body="$(curl -fsS --max-time 3 "http://127.0.0.1:${port}/healthz" 2>/dev/null || true)"
   rooms="$(printf '%s' "$body" | sed -n 's/.*"rooms":\([0-9]*\).*/\1/p')"
-  if [[ -n "$relay" ]]; then
-    if [[ "$relay_port" == "$port" || -z "$relay_port" ]]; then
-      relay_line="开 · 与房间服务共用 $port 端口"
+
+  printf '  服务    %s%s%s\n' "$C_OK" "${active:-未知}" "$C_OFF"
+  printf '  节点    %s\n' "${name:-未命名}"
+
+  # —— 门 ——
+  if [[ -n "$rooms" ]]; then
+    if [[ "$maxr" -gt 0 ]]; then
+      crowd="$(( rooms * 100 / maxr ))"
+      mood="宽松"
+      (( crowd >= 80 )) && mood="很挤"
+      (( crowd >= 50 && crowd < 80 )) && mood="有点挤"
+      printf '  门      %s 扇开着 · 上限 %s（%s%%，%s）\n' "$rooms" "$maxr" "$crowd" "$mood"
     else
-      relay_line="开 · 单独 $relay_port 端口（$relay）"
+      printf '  门      %s 扇开着 · 不限数量\n' "$rooms"
     fi
   else
-    relay_line="未开启（只做信令）"
+    printf '  门      %s\n' "读不到（服务没起？）"
   fi
-  printf '  服务    %s%s%s\n' "$C_OK" "$active" "$C_OFF"
-  printf '  节点    %s\n' "${name:-未知}"
-  printf '  门      %s 扇开着\n' "${rooms:-?}"
-  printf '  端口    房间 %s%s\n' "$port" "$([[ -n "$relay_port" && "$relay_port" != "$port" ]] && echo " · 中继 $relay_port")"
-  printf '  中继    %s\n' "$relay_line"
+
+  # —— 端口：谁干什么，写清楚 ——
+  printf '\n  端口\n'
+  printf '    门/信令   TCP %s     登记房间、健康检查\n' "$port"
+  if [[ -n "$relay" ]]; then
+    local rp="${relay_port:-$port}"
+    printf '    中继      TCP %s     TLS，打不开洞时数据走这里\n' "$rp"
+    printf '    打洞辅助  UDP %s     QUIC 地址发现，帮两边互相找到\n' "$rp"
+  else
+    printf '    中继      %s\n' "未开启（只做信令）"
+  fi
+
+  # —— 中继 / 打洞 的实际状态 ——
+  if [[ -n "$relay" ]]; then
+    if systemctl is-active knock-relay >/dev/null 2>&1; then
+      printf '\n  中继    %s开%s\n' "$C_OK" "$C_OFF"
+    else
+      printf '\n  中继    %s！进程没起（systemctl status knock-relay）%s\n' "$C_WARN" "$C_OFF"
+    fi
+    local lim
+    lim="$(relay_limit)"
+    if [[ -n "$lim" && "$lim" -gt 0 ]]; then
+      printf '  每路限速  %s/s（每条中继连接，直连不受影响）\n' "$(human_bytes "$lim")"
+    fi
+    local qad
+    qad="$(sed -n 's/^enable_quic_addr_discovery *= *\(true\|false\).*/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+    if [[ "$qad" == "true" ]]; then
+      if udp_allowed "${relay_port:-$port}"; then
+        printf '  打洞    %s开%s（UDP %s 已放行）\n' "$C_OK" "$C_OFF" "${relay_port:-$port}"
+      else
+        printf '  打洞    %s！UDP %s 没放行，客户端会一直绕路%s\n' "$C_WARN" "${relay_port:-$port}" "$C_OFF"
+      fi
+    else
+      printf '  打洞    %s关%s\n' "$C_MUT" "$C_OFF"
+    fi
+  fi
+
+  # —— 流量 ——
+  local sent recv accepts disconns
+  sent="$(metric relayserver_bytes_sent_total)"
+  recv="$(metric relayserver_bytes_recv_total)"
+  if [[ -n "$sent" || -n "$recv" ]]; then
+    accepts="$(metric relayserver_accepts_total)"
+    disconns="$(metric relayserver_disconnects_total)"
+    printf '\n  流量（中继自启动以来）\n'
+    printf '    发出 %s · 收到 %s\n' "$(human_bytes "${sent:-0}")" "$(human_bytes "${recv:-0}")"
+    if [[ -n "$accepts" && -n "$disconns" ]]; then
+      printf '    当前连接 %s · 累计 %s 次\n' "$(( accepts - disconns ))" "$accepts"
+    fi
+  elif [[ -n "$relay" ]]; then
+    printf '\n  %s流量读不到：中继监控没开（enable_metrics = true）%s\n' "$C_MUT" "$C_OFF"
+  fi
+
+  # —— 证书 ——
+  local cert days
+  cert="$(sed -n 's/^manual_cert_path *= *"\([^"]*\)"/\1/p' "$RELAY_TOML" 2>/dev/null | head -1)"
+  if [[ -n "$cert" && -f "$cert" ]]; then
+    days="$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | sed 's/notAfter=//' | xargs -I{} date -d {} +%s 2>/dev/null | awk -v now="$(date +%s)" '{ printf "%d", ($1 - now) / 86400 }')"
+    printf '\n  证书    %s 天后到期\n' "${days:-?}"
+  fi
 }
 
 code() {
@@ -206,7 +304,8 @@ draw_menu() {
   hr
   printf '   1) 状态        2) 节点码      3) 日志\n'
   printf '   4) 重启        5) 开关中继    6) 改端口\n'
-  printf '   7) 证书        8) 升级        9) 卸载\n'
+  printf '   7) 证书        8) 限流        9) 升级\n'
+  printf '   u) 卸载\n'
   printf '   0) 退出\n'
   hr
   printf '选一个：'
@@ -326,6 +425,110 @@ act_cert() {
   back_hint
 }
 
+
+# 改一条限制：写回 node.json 再重启（配置只在启动时读）
+# 中继对**每个客户端连接**的接收限速（字节/秒）。空 = 不限。
+relay_limit() { sed -n 's/^bytes_per_second *= *\([0-9]*\)/\1/p' "$RELAY_TOML" 2>/dev/null | head -1; }
+
+set_relay_limit() { # set_relay_limit <字节/秒>，0 = 去掉限速
+  local bps="$1" tmp
+  tmp="$(mktemp)"
+  cp "$RELAY_TOML" "$RELAY_TOML.bak"
+  # 先把旧的 [limits.client.rx] 整块摘掉（直到下一个 [ 开头的行）
+  awk '
+    /^\[limits\.client\.rx\]/ { skip = 1; next }
+    skip && /^\[/ { skip = 0 }
+    !skip { print }
+  ' "$RELAY_TOML" > "$tmp"
+  if [[ "$bps" -gt 0 ]]; then
+    printf '\n[limits.client.rx]\nbytes_per_second = %s\nmax_burst_bytes = %s\n' "$bps" "$bps" >> "$tmp"
+  fi
+  cat "$tmp" > "$RELAY_TOML"
+  rm -f "$tmp"
+  systemctl restart knock-relay >/dev/null 2>&1
+  sleep 1
+  if systemctl is-active knock-relay >/dev/null 2>&1; then
+    if [[ "$bps" -gt 0 ]]; then ok "每路限速 $(human_bytes "$bps")/s"; else ok "已取消限速"; fi
+  else
+    warn "中继没起来，已恢复原配置"
+    cp "$RELAY_TOML.bak" "$RELAY_TOML"
+    systemctl restart knock-relay >/dev/null 2>&1 || true
+  fi
+}
+
+set_limit() { # set_limit <键> <值>
+  local key="$1" val="$2"
+  case "$key" in
+    max_rooms|create_per_minute|lookup_per_minute)
+      sed -i "s/\"$key\": *[0-9]*/\"$key\": $val/" "$CFG" || return 1
+      ;;
+    room_ttl)
+      sed -i "s/\"room_ttl\": *\"[^\"]*\"/\"room_ttl\": \"$val\"/" "$CFG" || return 1
+      ;;
+  esac
+  systemctl restart $UNIT >/dev/null 2>&1
+  sleep 1
+  if systemctl is-active $UNIT >/dev/null 2>&1; then
+    ok "改好了，服务已重启"
+  else
+    warn "服务没起来，看 journalctl -u $UNIT -n 20"
+  fi
+}
+
+view_limits() {
+  local key label cur choice val bps kb
+  while true; do
+    screen "限流与容量"
+    printf '  门与房间\n'
+    printf '    1) 同时最多门数   %s%s%s   （0 = 不限）\n' "$C_ACC" "$(json_num max_rooms)" "$C_OFF"
+    printf '    2) 每分钟开门数   %s%s%s\n' "$C_ACC" "$(json_num create_per_minute)" "$C_OFF"
+    printf '    3) 每分钟查码数   %s%s%s\n' "$C_ACC" "$(json_num lookup_per_minute)" "$C_OFF"
+    printf '    4) 房间寿命       %s%s%s\n' "$C_ACC" "$(json_str room_ttl)" "$C_OFF"
+    printf '  中继\n'
+    local lim
+    lim="$(relay_limit)"
+    if [[ -n "$lim" && "$lim" -gt 0 ]]; then
+      printf '    5) 每路限速       %s%s/s%s   （每条连接，直连不受影响）\n' "$C_ACC" "$(human_bytes "$lim")" "$C_OFF"
+    else
+      printf '    5) 每路限速       %s不限%s\n' "$C_ACC" "$C_OFF"
+    fi
+    hr
+    printf '  %s中继是按"每条连接"限速的：一个来客算一路。\n' "$C_MUT"
+    printf '  直连（打洞成功）不经过中继，这边限不到。%s\n' "$C_MUT"
+    printf '\n  选一个改（q 返回）：'
+    read -rsn1 choice || true
+    case "$choice" in
+      1) key=max_rooms; label="最多同时几扇门（0 = 不限）";;
+      2) key=create_per_minute; label="每分钟最多开几扇门";;
+      3) key=lookup_per_minute; label="每分钟最多查几次码";;
+      4) key=room_ttl; label="房间寿命（如 10m、1h）";;
+      5)
+        lim="$(relay_limit)"
+        printf '\n\n  每路限速（KB/s，0 = 不限）\n  现在：%s\n  新值：' "$( [[ -n "$lim" && "$lim" -gt 0 ]] && echo "$(( lim / 1024 )) KB/s" || echo "不限" )"
+        read -r kb || true
+        [[ "$kb" =~ ^[0-9]+$ ]] || { warn "只能填数字"; back_hint; continue; }
+        if [[ "$kb" -gt 1048576 ]]; then warn "最多 1048576 KB/s"; back_hint; continue; fi
+        bps=$(( kb * 1024 ))
+        set_relay_limit "$bps"
+        back_hint
+        continue;;
+      q|Q) return;;
+      *) continue;;
+    esac
+    if [[ "$key" == "room_ttl" ]]; then cur="$(json_str room_ttl)"; else cur="$(json_num "$key")"; fi
+    printf '\n\n  %s\n  现在：%s\n  新值：' "$label" "$cur"
+    read -r val || true
+    if [[ "$key" == "room_ttl" ]]; then
+      [[ "$val" =~ ^[0-9]+[smh]$ ]] || { warn "格式像 10m / 1h"; back_hint; continue; }
+    else
+      [[ "$val" =~ ^[0-9]+$ ]] || { warn "只能填数字"; back_hint; continue; }
+      [[ "$key" == "max_rooms" ]] && { [[ "$val" -le 10000 ]] || { warn "最多 10000"; back_hint; continue; }; }
+    fi
+    set_limit "$key" "$val"
+    back_hint
+  done
+}
+
 act_upgrade() {
   screen "升级"
   printf '  升级要换二进制：带新的 install.sh 重跑，或者\n\n'
@@ -359,12 +562,32 @@ menu() {
       5) act_relay;;
       6) act_port;;
       7) act_cert;;
-      8) act_upgrade;;
-      9) act_uninstall;;
+      8) view_limits;;
+      9) act_upgrade;;
+      u|U) act_uninstall;;
       0|q|Q) clear; break;;
       *) ;;
     esac
   done
+}
+
+
+limits_cmd() {
+  case "${1:-}" in
+    "")
+      printf '  最多门数      %s\n' "$(json_num max_rooms)"
+      printf '  每分钟开门    %s\n' "$(json_num create_per_minute)"
+      printf '  每分钟查码    %s\n' "$(json_num lookup_per_minute)"
+      printf '  房间寿命      %s\n' "$(json_str room_ttl)"
+      printf '  每路限速      %s\n' "$( if [[ -n "$(relay_limit)" && "$(relay_limit)" -gt 0 ]]; then echo "$(( $(relay_limit) / 1024 )) KB/s"; else echo 不限; fi )"
+      ;;
+    max-rooms)  need_root && set_limit max_rooms "${2:?用法: knock limits max-rooms 200}";;
+    create)     need_root && set_limit create_per_minute "${2:?用法: knock limits create 10}";;
+    lookup)     need_root && set_limit lookup_per_minute "${2:?用法: knock limits lookup 30}";;
+    ttl)        need_root && set_limit room_ttl "${2:?用法: knock limits ttl 10m}";;
+    rate)       need_root && set_relay_limit $(( ${2:?用法: knock limits rate 1024} * 1024 ));;
+    *) warn "用法：knock limits [max-rooms N | create N | lookup N | ttl 10m | rate KB/s]"; return 1;;
+  esac
 }
 
 case "${1:-menu}" in
@@ -375,6 +598,7 @@ case "${1:-menu}" in
   logs) shift; journalctl -u $UNIT -n 80 --no-pager "$@";;
   restart) need_root && systemctl restart $UNIT && ok "重启了";;
   relay) relay_toggle "${2:-}";;
+  limits) shift; limits_cmd "$@";;
   uninstall) uninstall;;
   menu) menu;;
   -h|--help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//';;

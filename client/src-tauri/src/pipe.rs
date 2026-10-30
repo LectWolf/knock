@@ -131,6 +131,9 @@ pub trait Gate: Send + Sync {
 
     /// 走了（自己断的，或被断的）。
     fn left(&self, _peer: &[u8; 32]) {}
+
+    /// 挂一个"把这条连接断掉"的动作，踢人时用。默认不挂。
+    fn watch(&self, _peer: &[u8; 32], _closer: crate::sessions::Closer) {}
 }
 
 /// 什么都放的闸门。只给测试和"还没接名单"的过渡期用。
@@ -149,6 +152,19 @@ pub fn default_hello() -> Hello {
     Hello {
         proto: control::PROTO_VERSION,
         nickname: "knock".to_string(),
+        app: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+/// 带昵称的自报家门。昵称为空或不合法时退回默认值——不能因为没填名字就进不去门。
+pub fn hello_as(nickname: &str) -> Hello {
+    let nickname = match control::clean_nickname(nickname) {
+        Ok(n) => n,
+        Err(_) => "knock".to_string(),
+    };
+    Hello {
+        proto: control::PROTO_VERSION,
+        nickname,
         app: env!("CARGO_PKG_VERSION").to_string(),
     }
 }
@@ -218,6 +234,15 @@ pub async fn serve_gated(endpoint: Endpoint, target: SocketAddr, gate: GateRef) 
             // 登记进名册：走的是不是绕路，这里翻一眼就知道
             let via_relay = connection.paths().iter().any(|p| p.is_relay());
             gate.joined(&hello, &peer, via_relay);
+
+            // 踢人要真的断：把这条连接包成一个动作交给名册
+            let kickable = connection.clone();
+            gate.watch(
+                &peer,
+                std::sync::Arc::new(move || {
+                    let _ = kickable.close(4u8.into(), b"kicked");
+                }),
+            );
 
             // —— 第二道：数据流，一条流对应本机一条 TCP 连接 ——
             loop {

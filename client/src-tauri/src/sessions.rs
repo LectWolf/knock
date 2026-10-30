@@ -4,7 +4,7 @@
 //! 一扇门可以在线多人（ADR-0004），所以这是一份列表，不是单个会话。
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::control::{Hello, RejectReason, Reply};
@@ -12,6 +12,11 @@ use crate::pipe::Gate;
 
 /// EndpointId 的原始字节，用来认人。
 pub type Peer = [u8; 32];
+
+/// 踢人时用来"真的把他断掉"的一个动作。
+///
+/// 名册只管名单，不碰连接；把连接包成闭包挂在这里，踢的时候统一执行。
+pub type Closer = std::sync::Arc<dyn Fn() + Send + Sync>;
 
 /// 门里一个人。
 #[derive(Debug, Clone)]
@@ -42,6 +47,8 @@ struct Inner {
     conns: HashMap<Peer, usize>,
     /// 本房间踢过谁（关门即忘，不落盘）
     kicked: HashSet<Peer>,
+    /// 每个人身上挂着的"怎么断开他"。踢人时逐个执行。
+    closers: HashMap<Peer, Vec<Closer>>,
     /// 门是不是正在关
     closing: bool,
 }
@@ -64,6 +71,7 @@ impl SessionList {
                 live: HashMap::new(),
                 conns: HashMap::new(),
                 kicked: HashSet::new(),
+                closers: HashMap::new(),
                 closing: false,
             }),
         }
@@ -80,6 +88,11 @@ impl SessionList {
         });
     }
 
+    /// 挂一个"断他"的动作。同一个人可能有多条连接，就挂多个。
+    pub fn watch(&self, peer: &Peer, closer: Closer) {
+        self.lock().closers.entry(*peer).or_default().push(closer);
+    }
+
     /// 一条连接断了。还有别的连接挂着就只是减一，最后一条断了才算人走了。
     pub fn leave(&self, peer: &Peer) {
         let mut inner = self.lock();
@@ -88,6 +101,7 @@ impl SessionList {
             Some(_) => {
                 inner.conns.remove(peer);
                 inner.live.remove(peer);
+                inner.closers.remove(peer);
             }
             None => {
                 // 没登记过（或已经被踢）：兜底删干净，不留幽灵
@@ -98,10 +112,18 @@ impl SessionList {
 
     /// 踢出去：断他的会话，并且在本房间内记住他，别让他再敲进来。
     pub fn kick(&self, peer: &Peer) {
-        let mut inner = self.lock();
-        inner.live.remove(peer);
-        inner.conns.remove(peer);
-        inner.kicked.insert(*peer);
+        // 先摘名单，再断连接：断连接会回调 leave()，那时名单里已经没他了。
+        let closers: Vec<Closer> = {
+            let mut inner = self.lock();
+            inner.live.remove(peer);
+            inner.conns.remove(peer);
+            inner.kicked.insert(*peer);
+            inner.closers.remove(peer).unwrap_or_default()
+        };
+        // 别捏着锁去关连接：关的动作可能慢，别人还要进名册
+        for closer in closers {
+            closer();
+        }
     }
 
     /// 开始关门：从这一刻起谁来都不放，但门里的人还没断。
@@ -173,6 +195,10 @@ impl Gate for SessionList {
     fn left(&self, peer: &Peer) {
         self.leave(peer);
     }
+
+    fn watch(&self, peer: &Peer, closer: Closer) {
+        SessionList::watch(self, peer, closer);
+    }
 }
 
 #[cfg(test)]
@@ -196,6 +222,43 @@ mod tests {
     fn a_normal_guest_is_admitted() {
         let list = SessionList::new();
         assert_eq!(list.admit(&hello(PROTO_VERSION), &peer(1)), Reply::True);
+    }
+
+    #[test]
+    fn a_kick_really_hangs_up_on_him() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let list = SessionList::new();
+        let closed = Arc::new(AtomicUsize::new(0));
+        let hit = Arc::clone(&closed);
+        list.watch(&peer(1), Arc::new(move || {
+            hit.fetch_add(1, Ordering::SeqCst);
+        }));
+        list.join(peer(1), "小乐", false);
+        assert_eq!(list.len(), 1, "先得在名册里");
+
+        list.kick(&peer(1));
+
+        assert_eq!(closed.load(Ordering::SeqCst), 1, "踢人必须真的把连接断掉");
+        assert!(list.is_empty(), "踢完名册里不该还有人");
+    }
+
+    #[test]
+    fn kicking_one_guest_leaves_the_others_alone() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let list = SessionList::new();
+        let closed = Arc::new(AtomicUsize::new(0));
+        let hit = Arc::clone(&closed);
+        list.watch(&peer(2), Arc::new(move || {
+            hit.fetch_add(1, Ordering::SeqCst);
+        }));
+        list.join(peer(1), "先来的", false);
+        list.join(peer(2), "后来的", false);
+
+        list.kick(&peer(1));
+
+        assert_eq!(closed.load(Ordering::SeqCst), 0, "别人不该被牵连");
+        assert_eq!(list.len(), 1);
+        assert_eq!(list.snapshot()[0].0, peer(2));
     }
 
     #[test]
