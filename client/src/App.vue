@@ -307,6 +307,24 @@ const openNodes = () => {
   else void probeAll();
 };
 
+const logFile = ref("");
+const loadLogPath = async () => {
+  if (!isShell) return;
+  try {
+    logFile.value = await invoke!("log_path");
+  } catch {
+    logFile.value = "";
+  }
+};
+const openLog = async () => {
+  if (!isShell) return;
+  try {
+    await invoke!("open_log");
+  } catch (e: any) {
+    warn.value = explain(e);
+  }
+};
+
 const closeNodes = () => {
   showNodes.value = false;
   showSettings.value = true;
@@ -359,6 +377,7 @@ const useCustomNode = async () => {
 };
 
 watch(showSettings, (open) => {
+  if (open) void loadLogPath();
   if (open && !nodeList.value.length) void loadNodes();
 });
 const nodeAddr = ref(params.get("node") ?? "");
@@ -723,6 +742,11 @@ const back = async () => {
             <span class="setting-label">外观</span>
             <button class="ghost tiny" type="button" @click="nextTheme">{{ themeLabel }}</button>
           </label>
+          <div class="row-setting">
+            <span class="setting-label">日志</span>
+            <button class="ghost tiny" type="button" @click="openLog">打开 latest.log</button>
+          </div>
+          <p v-if="logFile" class="log-hint mono">{{ logFile }}</p>
         </div>
         <button class="ghost" type="button" @click="showSettings = false">返回</button>
       </template>
@@ -764,10 +788,11 @@ const back = async () => {
                 <input
                   v-model="input"
                   class="code-input mono"
-                  inputmode="latin"
+                  :class="{ long: input.length > 12 }"
+                  inputmode="text"
                   autocomplete="off"
                   spellcheck="false"
-                  maxlength="6"
+                  maxlength="64"
                   placeholder="粘门牌号进来"
                 />
               </label>
@@ -1241,8 +1266,25 @@ textarea {
 }
 .code-input::placeholder {
   color: var(--muted);
-  opacity: 0.55;
-  letter-spacing: 0.24em;
+  opacity: 0.8;
+  /* 占位文字用正文字体、正常字距；等宽+宽字距是给输入后的码用的 */
+  font-family: inherit;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+/* 完整门牌号有 35 个字符，21px 会撑爆，按长度收一点 */
+.log-hint {
+  margin: 2px 2px 0;
+  color: var(--muted);
+  font-size: 11px;
+  word-break: break-all;
+  opacity: 0.75;
+}
+.code-input.long {
+  font-size: 13px;
+  letter-spacing: 0.02em;
+  padding-left: 10px;
+  padding-right: 10px;
 }
 .code-input:focus {
   border-color: var(--accent-line);
