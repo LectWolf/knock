@@ -4,6 +4,7 @@
 //! 一扇门可以在线多人（ADR-0004），所以这是一份列表，不是单个会话。
 
 use std::collections::{HashMap, HashSet};
+#[allow(unused_imports)]
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -121,6 +122,25 @@ impl SessionList {
             inner.closers.remove(peer).unwrap_or_default()
         };
         // 别捏着锁去关连接：关的动作可能慢，别人还要进名册
+        for closer in closers {
+            closer();
+        }
+    }
+
+    /// 关门/退出时把所有人的连接都断开，但不记进"被踢"名单——
+    /// 门关了是主人的事，不是这些人做错了什么，下次开门还能来。
+    ///
+    /// 不这么做的话，房主那边进程没了，房客要靠 QUIC 空闲超时（30 秒级）
+    /// 才发现，界面就会一直停在"门开了"。
+    pub fn hang_up(&self) {
+        let closers: Vec<Closer> = {
+            let mut inner = self.lock();
+            let mut all = Vec::new();
+            for (_, cs) in inner.closers.drain() {
+                all.extend(cs);
+            }
+            all
+        };
         for closer in closers {
             closer();
         }
@@ -381,5 +401,39 @@ mod tests {
                 reason: RejectReason::Kicked
             }
         );
+    }
+}
+
+
+#[cfg(test)]
+mod hang_up_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn closing_the_door_hangs_up_without_marking_anyone_kicked() {
+        let list = SessionList::new();
+        let peer = [7u8; 32];
+        list.joined(
+            &crate::control::Hello {
+                proto: crate::control::PROTO_VERSION,
+                nickname: "小乐".into(),
+                app: "test".into(),
+            },
+            &peer,
+            false,
+        );
+        let closed = std::sync::Arc::new(AtomicUsize::new(0));
+        let c = closed.clone();
+        list.watch(&peer, std::sync::Arc::new(move || {
+            c.fetch_add(1, Ordering::SeqCst);
+        }));
+
+        list.hang_up();
+        assert_eq!(closed.load(Ordering::SeqCst), 1, "关门得真的断连接");
+
+        // 没记进被踢名单：关门之后再敲，照样能进
+        list.join(peer, "小乐", false);
+        assert_eq!(list.len(), 1, "关门不是踢人，下回还能来");
     }
 }

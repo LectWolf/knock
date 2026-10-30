@@ -452,7 +452,6 @@ fn show_main(app: &AppHandle) {
 
 fn main() {
     // 日志必须比别的东西先起来：后面任何一步出错都得留下痕迹。
-    // 放 exe 同目录，用户拿到压缩包就能直接看到 latest.log。
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
@@ -483,6 +482,14 @@ fn main() {
         }
     }));
 
+    // 界面引擎被上一次残留的 msedgewebview2 锁住时（强制结束后很常见），
+    // Tauri 会直接 panic。换数据目录这招试过——WebView2 照样报同一个共享冲突，
+    // 所以这里不做无用功：panic hook 已经把"结束残留进程再试"写进日志了。
+    launch();
+}
+
+/// 起界面。
+fn launch() {
     tauri::Builder::default()
         // 单实例：二次启动只把已有窗口叫出来，不开第二扇门
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {

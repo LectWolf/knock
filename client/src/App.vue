@@ -162,7 +162,14 @@ const trackOpenTimer = () => {
 const pull = async () => {
   if (!invoke) return;
   const s = await invoke("door_state").catch(() => null);
-  if (s) state.value = s as ConnState;
+  if (s) {
+    state.value = s as ConnState;
+    // 门不在了：上一扇门的入口地址不该还留在屏幕上
+    if (s === "idle" || s === "failed") {
+      entry.value = "";
+      guests.value = [];
+    }
+  }
   const e = await invoke("entry_addr").catch(() => null);
   if (typeof e === "string" && e) entry.value = e;
   const c = await invoke("door_code").catch(() => null);
@@ -587,8 +594,13 @@ const open = async () => {
   }
   state.value = "creating";
 };
-const retry = () => {
+const retry = async () => {
+  // 回到门口 = 真的把这扇门关掉。只改本地状态的话，下一秒轮询又会被
+  // door_state 拉回"门开了"——这就是之前"回不去门口"的原因。
+  entry.value = "";
+  code.value = "······";
   state.value = "idle";
+  if (invoke) await invoke("close_door").catch(() => {});
 };
 
 /* 失败后不只有"再试一次"：也可以退回门口重新想想到底要敲门还是开门 */

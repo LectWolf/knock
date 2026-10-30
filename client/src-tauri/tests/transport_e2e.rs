@@ -319,8 +319,21 @@ async fn a_heartbeat_keeps_the_door_from_expiring() {
     host.on_state(_sink);
     host.connect(Target::Open { port: 25565 }).expect("房主受理");
 
-    wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
-    wait_for("房主进入等对方", 20, || host.state() == ConnState::Waiting).await;
+    // 节点有"每分钟开门数"配额，连跑整套 e2e 时偶尔会被挡；
+    // 等一会儿重开一次，别把配额当功能坏了。
+    let mut opened = false;
+    for attempt in 0..3 {
+        host.connect(Target::Open { port: 25565 }).expect("房主受理");
+        wait_for("房主拿到门牌号", 20, || host.room_code().is_some()).await;
+        if wait_or("房主进入等对方", 20, || host.state() == ConnState::Waiting).await {
+            opened = true;
+            break;
+        }
+        println!("第 {} 次被节点挡了（{:?}），等 20 秒再来", attempt + 1, host.state());
+        host.close();
+        tokio::time::sleep(Duration::from_secs(20)).await;
+    }
+    assert!(opened, "试了三次都没能开门");
     let code = host.room_code().expect("门牌号");
 
     // 睡过 TTL：没心跳的话这里房间已经没了
@@ -510,4 +523,97 @@ async fn the_host_sees_my_nickname_and_can_show_me_out() {
     let gone = wait_or("名册里没他了", 10, || sessions.is_empty()).await;
     println!("踢完名册 {} 人", sessions.len());
     assert!(gone, "踢出去之后名册里不该还留着他");
+}
+
+
+/// 房主关门之后，房客不能一直停在「门开了」——之前就是这样：
+/// 对面都没了，界面还绿着，而且点「回到门口」也回不去。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "需要一台真节点；见文件头的环境变量"]
+async fn a_guest_notices_when_the_host_closes_the_door() {
+    let base = env("KNOCK_NODE_URL");
+    let node_code = env("KNOCK_NODE_CODE");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    let mc_port = fake_mc_server().await;
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_hs, _hl) = recorder();
+    host.on_state(_hs);
+    host.connect(Target::Open { port: mc_port }).expect("房主受理");
+    wait_for("房主拿到门牌号", 25, || host.room_code().is_some()).await;
+    // waiting 现在只在地址真的挂上之后才出现，等到它就是"门已经能被敲"
+    wait_for("房主把地址挂上去", 15, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+
+    let mut guest = IrohTransport::new(Arc::clone(&client)).with_nickname("小乐");
+    let (gsink, glog) = recorder();
+    guest.on_state(gsink);
+    guest.connect(Target::Knock { invite: &format!("{node_code}.{code}") }).expect("房客受理");
+    let opened = wait_or("房客连上", 30, || {
+        matches!(guest.state(), ConnState::Direct | ConnState::Relay)
+    })
+    .await;
+    if !opened {
+        for u in glog.lock().unwrap().iter() {
+            println!("房客状态：{:?} fail={:?}", u.state, u.fail);
+        }
+    }
+    assert!(opened, "先得连上，实际 {:?}", guest.state());
+
+    host.close();
+    let noticed = wait_or("房客发现门关了", 25, || guest.state() == ConnState::Failed).await;
+    println!("房客现在：{:?}", guest.state());
+    assert!(noticed, "房主关门后，房客不能还是「门开了」");
+}
+
+
+/// 开服的那个进程没了（不是房主关窗，是 MC 服务端自己停了）：
+/// 房客也必须从「门开了」退回「屋里没人」，不能等他手动点。
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "需要一台真节点；见文件头的环境变量"]
+async fn a_guest_notices_when_the_game_server_stops() {
+    let base = env("KNOCK_NODE_URL");
+    let node_code = env("KNOCK_NODE_CODE");
+    let client: Arc<dyn knock::room::RoomClient + Send + Sync> =
+        Arc::new(HttpRoomClient::new(base));
+
+    // 一个能随时关掉的"MC 服务端"
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("绑定假 MC");
+    let mc_port = listener.local_addr().unwrap().port();
+    let (stop_tx, mut stop_rx) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = listener.accept() => {}
+                _ = &mut stop_rx => return,
+            }
+        }
+    });
+
+    let mut host = IrohTransport::new(Arc::clone(&client));
+    let (_hs, _hl) = recorder();
+    host.on_state(_hs);
+    host.connect(Target::Open { port: mc_port }).expect("房主受理");
+    wait_for("房主拿到门牌号", 25, || host.room_code().is_some()).await;
+    wait_for("房主把地址挂上去", 15, || host.state() == ConnState::Waiting).await;
+    let code = host.room_code().expect("门牌号");
+
+    let mut guest = IrohTransport::new(Arc::clone(&client)).with_nickname("小乐");
+    let (_gs, _gl) = recorder();
+    guest.on_state(_gs);
+    guest.connect(Target::Knock { invite: &format!("{node_code}.{code}") }).expect("房客受理");
+    let opened = wait_or("房客连上", 30, || {
+        matches!(guest.state(), ConnState::Direct | ConnState::Relay)
+    })
+    .await;
+    assert!(opened, "先得连上，实际 {:?}", guest.state());
+
+    // 服务端停掉：房主窗口还开着，门也还开着
+    let _ = stop_tx.send(());
+    tokio::time::sleep(Duration::from_millis(300)).await;
+
+    let noticed = wait_or("房客发现屋里没人", 25, || guest.state() == ConnState::Failed).await;
+    println!("房客现在：{:?}", guest.state());
+    assert!(noticed, "服务端停了，房客不该还显示门开了");
 }

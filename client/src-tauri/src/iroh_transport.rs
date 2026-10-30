@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use iroh::{Endpoint, EndpointAddr, PublicKey, RelayUrl};
 
-use crate::control::RejectReason;
+use crate::control::{RejectReason, Reply};
 use crate::invite::Invite;
 use crate::machine::{Event, Machine, RelayPolicy, Role, Update};
 use crate::pipe;
@@ -192,6 +192,8 @@ impl Transport for IrohTransport {
             }
         }
 
+        // 门里的人得当场知道：主动断开比等 QUIC 空闲超时快得多。
+        self.sessions.hang_up();
         let _ = emit(&self.machine, &self.sink, Event::CloseRequested);
     }
 
@@ -267,7 +269,6 @@ impl Ctx {
             return Ok(());
         };
 
-        self.emit(Event::RoomRegistered);
 
         // 把自己的身份与直连地址挂到房间上。
         // 端点的地址要等网卡探完才有，所以先等一会儿——announce 空地址会被节点拒绝。
@@ -300,6 +301,45 @@ impl Ctx {
             self.emit(Event::RoomRegisterFailed);
             return Ok(());
         }
+
+        // 「等对方」要在**地址真的挂上去之后**才说：
+        // 之前是先报 waiting 再 announce，中间那几百毫秒里房客一敲就被判
+        // host_offline——门明明刚开，朋友却看到"屋里没人"。
+        self.emit(Event::RoomRegistered);
+
+        // 房主盯着自己的 MC 端口：服务端一停，门里那些人的界面不能还绿着。
+        // 只断连接（不踢、不关房间）：服务端起来之后门还是这扇门。
+        let mon_alive = Arc::clone(&self.running);
+        let mon_sessions = Arc::clone(&self.sessions);
+        tokio::spawn(async move {
+            let target: SocketAddr = ([127, 0, 0, 1], port).into();
+            let mut misses = 0u32;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                if !mon_alive.load(Ordering::SeqCst) {
+                    return;
+                }
+                let up = tokio::time::timeout(
+                    std::time::Duration::from_millis(800),
+                    tokio::net::TcpStream::connect(target),
+                )
+                .await
+                .map(|r| r.is_ok())
+                .unwrap_or(false);
+                if up {
+                    misses = 0;
+                    continue;
+                }
+                misses += 1;
+                // 连着两次连不上才算停：一次可能是端口瞬间忙
+                if misses == 2 {
+                    if std::env::var("KNOCK_TRACE").is_ok() {
+                        eprintln!("[host] MC 端口没响应，先把门里的人断开");
+                    }
+                    mon_sessions.hang_up();
+                }
+            }
+        });
 
         // 心跳：房间寿命是从**最后一次 announce** 算的，不续命十分钟后门就自己没了，
         // 而界面上还写着"门开着"——这是最伤信任的一种不一致。
@@ -439,11 +479,54 @@ impl Ctx {
             self.emit(event);
 
             let hello = pipe::hello_as(&self.nickname);
-            let Ok(local) = pipe::listen_local_hello(endpoint, addr, hello).await else {
+            // 房主拒绝（比如服务端关了）时要有人告诉界面，不能一直是"门开了"
+            let (tx, mut refused_rx) = tokio::sync::mpsc::unbounded_channel();
+            let Ok(local) =
+                pipe::listen_local_notify(endpoint.clone(), addr.clone(), hello.clone(), Some(tx)).await
+            else {
                 self.fail(FailReason::RelayUnavailable);
                 return Ok(());
             };
             *self.local.lock().unwrap() = Some(local);
+
+            // 常驻一条连接，专门盯着"对面还在不在"：
+            // 房主关门、进程被杀、中继没了，这条都会断，界面就该回到没敲开。
+            let watch_ep = endpoint.clone();
+            let watch_addr = addr.clone();
+            let watch_hello = hello.clone();
+            let machine = Arc::clone(&self.machine);
+            let sink = Arc::clone(&self.sink);
+            tokio::spawn(async move {
+                let Ok(conn) = watch_ep.connect(watch_addr, pipe::ALPN).await else {
+                    emit(&machine, &sink, Event::PeerLeft);
+                    return;
+                };
+                let mut admitted = false;
+                if let Ok((mut send, mut recv)) = conn.open_bi().await {
+                    if pipe::send_frame(&mut send, &watch_hello).await.is_ok() {
+                        if let Ok(Reply::True) = pipe::recv_frame::<Reply>(&mut recv).await {
+                            admitted = true;
+                        }
+                    }
+                }
+                if !admitted {
+                    emit(&machine, &sink, Event::PeerLeft);
+                    return;
+                }
+                let why = conn.closed().await;
+                if std::env::var("KNOCK_TRACE").is_ok() {
+                    eprintln!("[watch] 常驻连接断了：{why:?}");
+                }
+                emit(&machine, &sink, Event::PeerLeft);
+            });
+
+            let machine = Arc::clone(&self.machine);
+            let sink = Arc::clone(&self.sink);
+            tokio::spawn(async move {
+                if refused_rx.recv().await.is_some() {
+                    emit(&machine, &sink, Event::PeerLeft);
+                }
+            });
             return Ok(());
         }
 
@@ -459,23 +542,6 @@ impl Ctx {
             let _ = self.emit(Event::RelayRejected);
         }
         Ok(())
-    }
-}
-
-/// 探一下路能不能通：开一条双向流再立刻关掉。
-///
-/// 服务端会把它接到本机 MC 端口上，得到一个"连上就断"的痕迹——
-/// MC 服务端对这种连接是不理会的。用这个换"这一秒到底通没通"的判断。
-async fn probe(endpoint: &Endpoint, addr: EndpointAddr) -> bool {
-    let Ok(conn) = endpoint.connect(addr, pipe::ALPN).await else {
-        return false;
-    };
-    match conn.open_bi().await {
-        Ok((mut send, _recv)) => {
-            let _ = send.finish();
-            true
-        }
-        Err(_) => false,
     }
 }
 

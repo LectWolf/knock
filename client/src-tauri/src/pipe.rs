@@ -240,7 +240,7 @@ pub async fn serve_gated(endpoint: Endpoint, target: SocketAddr, gate: GateRef) 
             gate.watch(
                 &peer,
                 std::sync::Arc::new(move || {
-                    let _ = kickable.close(4u8.into(), b"kicked");
+                    let _ = kickable.close(4u8.into(), b"closed");
                 }),
             );
 
@@ -330,6 +330,16 @@ pub async fn listen_local_hello(
     node: EndpointAddr,
     hello: Hello,
 ) -> io::Result<SocketAddr> {
+    listen_local_notify(endpoint, node, hello, None).await
+}
+
+/// 同上，外加"房主不让我进了"的通知：用来把界面从「门开了」拉回失败。
+pub async fn listen_local_notify(
+    endpoint: Endpoint,
+    node: EndpointAddr,
+    hello: Hello,
+    refused: Option<tokio::sync::mpsc::UnboundedSender<()>>,
+) -> io::Result<SocketAddr> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local = listener.local_addr()?;
 
@@ -341,6 +351,7 @@ pub async fn listen_local_hello(
             let endpoint = endpoint.clone();
             let node = node.clone();
             let hello = hello.clone();
+            let refused = refused.clone();
 
             tokio::spawn(async move {
                 let Ok(connection) = endpoint.connect(node, ALPN).await else {
@@ -360,6 +371,9 @@ pub async fn listen_local_hello(
                 };
                 if reply != Reply::True {
                     connection.close(3u8.into(), b"rejected");
+                    if let Some(tx) = &refused {
+                        let _ = tx.send(());
+                    }
                     return;
                 }
 
@@ -375,7 +389,7 @@ pub async fn listen_local_hello(
 }
 
 /// 一帧控制帧写出去。控制流写一帧就结束，不留在那儿。
-async fn send_frame<T: serde::Serialize>(
+pub(crate) async fn send_frame<T: serde::Serialize>(
     send: &mut iroh::endpoint::SendStream,
     frame: &T,
 ) -> io::Result<()> {
@@ -387,7 +401,7 @@ async fn send_frame<T: serde::Serialize>(
 }
 
 /// 读一帧控制帧。长度前缀说多少就读多少，读不满就是坏帧。
-async fn recv_frame<T: for<'de> serde::Deserialize<'de>>(
+pub(crate) async fn recv_frame<T: for<'de> serde::Deserialize<'de>>(
     recv: &mut iroh::endpoint::RecvStream,
 ) -> io::Result<T> {
     let mut len_bytes = [0u8; 2];
