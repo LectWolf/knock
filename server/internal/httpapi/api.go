@@ -15,7 +15,7 @@
 //	                                  409 too_many_announces
 //	GET    /rooms/{code}           → 200 {...} | 404 code_not_found | 429 too_many_requests
 //	DELETE /rooms/{code}           → 204 | 404 code_not_found | 429 too_many_requests
-//	GET    /healthz                → 200 {status:"ok", name:"香港·荃湾", proto:{api,transport}, rooms:N}
+//	GET    /healthz                → 200 {status:"ok", name:"香港·荃湾", code:"<节点码>", proto:{api,transport}, rooms:N}
 //
 // 三处刻意的设计：
 //
@@ -28,15 +28,15 @@
 package httpapi
 
 import (
-	"net/http/httputil"
-	"net/url"
-	"strings"
 	"encoding/json"
 	"errors"
 	"math"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"knock/internal/ratelimit"
@@ -57,6 +57,8 @@ type API struct {
 	nodeID   string
 	relayURL string
 	name     string
+	// code 是这个节点的编码，客户端拿它拼完整门牌号。
+	code string
 }
 
 // Option 是可选的防护配置。不传就是不限速（只在测试或本机调试时这样用）。
@@ -90,6 +92,14 @@ func WithRelayURL(u string) Option {
 
 // WithName 设置节点对外显示的名字，比如「香港·荃湾」。
 // 名字由节点自己报，不依赖任何公共名单——名单只是省去手输节点码。
+// WithNodeCode 把节点编码挂上去，让 /healthz 能报出来。
+//
+// 客户端拼门牌号（<节点码>.<房间码>）要用它；不带的话，不在列表里的节点
+// 就只能给出 6 位短码，朋友还得先加节点。
+func WithNodeCode(code string) Option {
+	return func(a *API) { a.code = code }
+}
+
 func WithName(name string) Option {
 	return func(a *API) { a.name = name }
 }
@@ -329,6 +339,7 @@ func (a *API) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":        "ok",
 		"name":          a.name,
+		"code":          a.code,
 		"proto":         protoInfo{API: ProtoAPI, Transport: ProtoTransport},
 		"rooms":         a.svc.Len(),
 		"lookup_limit":  a.lookup.Limit(),

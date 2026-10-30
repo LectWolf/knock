@@ -155,6 +155,9 @@ pub struct Probe {
     pub name: String,
     /// 协议对不对得上（对不上等于用不了，界面要说清楚）
     pub proto_ok: bool,
+    /// 节点自报的编码。有它才能拼出完整门牌号（`<节点码>.<房间码>`），
+    /// 哪怕这个节点不在任何列表里。
+    pub code: Option<String>,
     /// 不通时的原因
     pub error: String,
 }
@@ -167,6 +170,7 @@ pub fn probe(url: &str) -> Probe {
         relay: false,
         name: String::new(),
         proto_ok: false,
+        code: None,
         error: String::new(),
     };
     let started = std::time::Instant::now();
@@ -188,11 +192,17 @@ pub fn probe(url: &str) -> Probe {
                         #[serde(default)]
                         relay_allowed: bool,
                         #[serde(default)]
+                        code: String,
+                        #[serde(default)]
                         proto: Option<Proto>,
                     }
                     match serde_json::from_str::<Health>(&body) {
                         Ok(h) => {
                             out.name = h.name;
+                            let code = h.code.trim().to_ascii_uppercase();
+                            if !code.is_empty() {
+                                out.code = Some(code);
+                            }
                             out.relay = h.relay_allowed && !h.relay_url.is_empty();
                             out.proto_ok = h
                                 .proto
@@ -214,6 +224,29 @@ pub fn probe(url: &str) -> Probe {
     out
 }
 
+/// 当前节点的编码从哪儿来：设置里 → 列表缓存 → 问节点自己。
+///
+/// 门牌号必须是完整邀请（`<节点码>.<房间码>`）。老配置里没存节点码、
+/// 或者节点是手工敲地址加进来的，都得靠这个函数补齐。
+pub fn code_for(dir: &Path, url: &str, known: &str) -> Option<String> {
+    let known = known.trim();
+    if NodeCode::decode(known).is_ok() {
+        return Some(known.to_ascii_uppercase());
+    }
+    let url = url.trim();
+    if url.is_empty() {
+        return None;
+    }
+    if let Some(list) = cached(dir) {
+        if let Some(e) = list.nodes.iter().find(|e| e.url == url) {
+            if !e.code.is_empty() {
+                return Some(e.code.clone());
+            }
+        }
+    }
+    probe(url).code
+}
+
 pub fn parse(text: &str) -> Result<List, String> {
     let mut raw: Raw = serde_json::from_str(text).map_err(|e| format!("列表格式不对：{e}"))?;
     for entry in &mut raw.nodes {
@@ -228,6 +261,21 @@ pub fn parse(text: &str) -> Result<List, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_known_code_wins_and_is_normalised() {
+        let dir = std::env::temp_dir().join("knock-code-for-1");
+        let _ = std::fs::create_dir_all(&dir);
+        let code = code_for(&dir, "http://example.com:1", "377pn6h4mph0wyefd838q42c674tr");
+        assert_eq!(code.as_deref(), Some("377PN6H4MPH0WYEFD838Q42C674TR"));
+    }
+
+    #[test]
+    fn an_empty_setting_means_no_code_rather_than_a_wrong_one() {
+        let dir = std::env::temp_dir().join("knock-code-for-2");
+        let _ = std::fs::create_dir_all(&dir);
+        assert!(code_for(&dir, "", "").is_none());
+    }
 
     const SAMPLE: &str = r#"{
       "version": 1,
@@ -311,6 +359,7 @@ mod probe_tests {
         // 中继是节点自己的选择：香港那台带，枣庄那台没带，两条都算正常
         println!("中继：{}", if p.relay { "有" } else { "无" });
         let ms = p.ms.unwrap();
+        assert!(p.code.is_some(), "healthz 里没报节点码：客户端拼不出完整门牌号");
         assert!(ms < 2000, "延迟离谱：{ms} ms");
     }
 

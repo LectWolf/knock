@@ -162,6 +162,7 @@ func main() {
 		httpapi.WithCreateLimiter(createLimiter),
 		httpapi.WithNodeID(identity.PublicKeyHex()),
 		httpapi.WithName(cfg.Name),
+		httpapi.WithNodeCode(codeText),
 		httpapi.WithRelayURL(cfg.RelayURL),
 	)
 

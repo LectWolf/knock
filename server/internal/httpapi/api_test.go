@@ -36,7 +36,7 @@ func newServer(t *testing.T) (*httptest.Server, *clock) {
 	t.Helper()
 	c := &clock{t: time.Date(2026, 10, 28, 12, 0, 0, 0, time.UTC)}
 	svc := rooms.NewService(rooms.NewMemoryStore(), time.Minute).Clock(c.now)
-	srv := httptest.NewServer(httpapi.New(svc).Handler())
+	srv := httptest.NewServer(httpapi.New(svc, httpapi.WithNodeCode("TESTCODE")).Handler())
 	t.Cleanup(srv.Close)
 	return srv, c
 }
@@ -260,12 +260,17 @@ func TestHealthz(t *testing.T) {
 	var body struct {
 		Status string `json:"status"`
 		Rooms  int    `json:"rooms"`
+		Code   string `json:"code"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("解析失败: %v", err)
 	}
 	if body.Status != "ok" || body.Rooms != 1 {
 		t.Fatalf("healthz = %+v，想要 status=ok rooms=1", body)
+	}
+	// 节点码也要报出来：客户端靠它拼完整门牌号（<节点码>.<房间码>）
+	if body.Code != "TESTCODE" {
+		t.Fatalf("healthz.code = %q，想要 TESTCODE", body.Code)
 	}
 }
 

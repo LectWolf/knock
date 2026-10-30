@@ -106,7 +106,14 @@ fn build_transport(app: &AppHandle, s: &Settings) -> Result<IrohTransport, Strin
 
 #[tauri::command]
 fn open_door(app: AppHandle, st: State<'_, App>, port: u16) -> Result<(), String> {
-    let s = settings::load(&config_dir(&app));
+    let mut s = settings::load(&config_dir(&app));
+    // 门牌号要带节点码，缺了就现在补（列表缓存 → 问节点自己），补到就存下来。
+    if let Some(code) = knock::nodes::code_for(&config_dir(&app), &s.node, &s.node_code) {
+        if s.node_code != code {
+            s.node_code = code;
+            let _ = settings::save(&config_dir(&app), &s);
+        }
+    }
     let mut transport = build_transport(&app, &s)?;
     transport
         .connect(Target::Open { port })
@@ -215,7 +222,17 @@ fn door_code(app: AppHandle, st: State<'_, App>) -> Option<String> {
         .unwrap()
         .as_ref()
         .and_then(|t| t.room_code())?;
-    let s = settings::load(&config_dir(&app));
+    let mut s = settings::load(&config_dir(&app));
+    if knock::invite::NodeCode::decode(s.node_code.trim()).is_err() {
+        // 不开门也能补：列表缓存里有就先用上，界面不用等网络。
+        if let Some(list) = knock::nodes::cached(&config_dir(&app)) {
+            if let Some(e) = list.nodes.iter().find(|e| e.url == s.node.trim()) {
+                if !e.code.is_empty() {
+                    s.node_code = e.code.clone();
+                }
+            }
+        }
+    }
     Some(knock::invite::door_label(&s.node_code, &room))
 }
 
