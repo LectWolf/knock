@@ -1,6 +1,6 @@
 [package]
 name = "knock"
-version = "0.1.0"
+version = "0.14.0"
 edition = "2021"
 publish = false
 description = "Knock 隧道核心：连接状态机、Transport 接口、iroh 数据通路"

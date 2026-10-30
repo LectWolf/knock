@@ -188,6 +188,7 @@ const pull = async () => {
 
 onMounted(async () => {
   if (!isShell) return;
+  version.value = (await invoke?.("app_version").catch(() => null)) ?? "";
   await loadSettings();
   await pull();
   shell?.event?.listen?.("knock://state", (e: any) => {
@@ -203,6 +204,8 @@ onMounted(async () => {
 });
 
 const showSettings = ref(params.get("panel") === "settings");
+/* 版本号以编译进去的为准，避免界面和安装包对不上 */
+const version = ref("");
 
 /* 节点列表：不内置，从仓库里拉一次并缓存 */
 const nodeList = ref<any[]>(
@@ -985,7 +988,7 @@ const back = async () => {
           </svg>
         </button>
       </div>
-      <span class="mono version">v0.1</span>
+      <span class="mono version">v{{ version || "0.14" }}</span>
     </footer>
   </div>
 </template>

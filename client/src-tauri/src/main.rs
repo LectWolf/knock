@@ -35,6 +35,12 @@ static LAST_DOOR_CODE: Mutex<String> = Mutex::new(String::new());
 /// 上一次记过的本机入口地址（房客那边要看它去游戏里连）。
 static LAST_ENTRY: Mutex<String> = Mutex::new(String::new());
 
+/// 界面右下角显示的版本号。以编译时的 Cargo 版本为准，别在界面上手写。
+#[tauri::command]
+fn app_version() -> String {
+    env!("CARGO_PKG_VERSION").to_string()
+}
+
 /// 日志落在哪儿——给界面的「看日志」用。
 #[tauri::command]
 fn log_path() -> String {
@@ -491,6 +497,10 @@ fn main() {
 /// 起界面。
 fn launch() {
     tauri::Builder::default()
+        // 记下到底加载的是打包进去的页面，还是开发服务器地址。
+        .on_page_load(|_webview, payload| {
+            klog!("INFO", "界面加载：{}", payload.url());
+        })
         // 单实例：二次启动只把已有窗口叫出来，不开第二扇门
         .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
             show_main(app);
@@ -513,6 +523,7 @@ fn launch() {
             kick,
             log_path,
             open_log,
+            app_version,
             win_minimize,
             win_pos,
             win_set_pos,
@@ -520,6 +531,10 @@ fn launch() {
         ])
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // setup 时窗口还是 about:blank，真地址要等加载完才看得到，
+            // 所以用 Builder 的 on_page_load 钩子（见下面 builder 链）。
+            let _ = &handle;
 
             let open = MenuItem::with_id(app, "open", "打开主界面", true, None::<&str>)?;
             let close_door_item = MenuItem::with_id(app, "close_door", "关门", true, None::<&str>)?;
